@@ -53,24 +53,30 @@
         </div>
         <div>
           <video id="player" controls playsinline></video>
+          <div id="yt-box"></div>
+          <p id="live-estado" class="oculto"></p>
+          <div id="live-ext"></div>
+          <p id="wk-chip" class="chip">Motor: …</p>
           <div class="botones">
             <button onclick="abrirLive()">▶ ABRIR LIVE</button>
-            <button class="rojo" onclick="iniciarGrab()">⏺ INICIAR GRABACIÓN</button>
-            <button onclick="activarRadar()">📡 ACTIVAR RADAR VIRAL</button>
+            <button id="btn-iniciar" class="rojo" onclick="iniciarGrab()">⏺ INICIAR GRABACIÓN</button>
+            <button id="btn-radar" onclick="activarRadar()">📡 ACTIVAR RADAR VIRAL <span id="radar-count"></span></button>
             <button onclick="ir('radar')">🔥 VER MOMENTOS DETECTADOS</button>
             <button class="grad" onclick="ir('analizar')">🎬 GENERAR CLIPS</button>
             <button class="grad" onclick="ir('publicar')">📤 PUBLICAR CLIP</button>
-            <button class="rojo" onclick="detenerGrab()">⏹ DETENER GRABACIÓN</button>
+            <button id="btn-detener" class="rojo" onclick="detenerGrab()">⏹ DETENER GRABACIÓN</button>
           </div>
           <p id="live-msg" class="msg"></p>
         </div>
       </div>
       <div id="ss-tabla"></div>
+      <div id="live-clips"></div>
     </section>
 
     <section data-sec="radar" class="oculto">
       <h3>📡 LIVE VIRAL RADAR — Momentos detectados</h3>
       <p class="nota">Puntuación 0–100 calculada de señales reales medidas (audio, escena, duración). Es una estimación: no garantiza vistas.</p>
+      <p id="ev-msg" class="msg"></p>
       <div id="eventos"></div>
     </section>
 

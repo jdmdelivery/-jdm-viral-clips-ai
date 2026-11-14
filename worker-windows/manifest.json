@@ -3,7 +3,7 @@
     "actualizador.py": "ee6a6f020a3f9bb2b7338d989fa993d4b2a1a143229edca360b19c4f7ddf09f0",
     "analyzer.py": "f09b36a81f8eda304233113ffddb170381dff829e5b636486978f7135798c28b",
     "buffer.py": "4d0309fb5585a6bf51536c9bdeecb22a37d4cb57c2598145b6042658fd37421a",
-    "capcut.py": "91f0e793474cf3794fdc7a1ccdee2952d3a8c2e8a3ac309ae1d387cc2e2f0fb1",
+    "capcut.py": "dda9d2f24c7621ac773aeb27b781a5e712e86a42984aa62163ea95a34d976287",
     "clipper.py": "172c720fb9b1ee0d2dab8408ca38bb278c2d39ffa14c053297b3efb2f7c1a27f",
     "dedup.py": "ea20122f59dae47d8f5551badd43425648de3f6a9281a2a894aed7f9e05e947f",
     "editor.py": "3b690747203c8fe76ba8e922d8bb6855866f2c02f2549a6a718c919c3009c091",
@@ -18,7 +18,7 @@
     "transcribe.py": "c01b3da417ff2bc9296f3cf8950bf45ff0b95c868623ac4df5353a6d1207b883",
     "viral.py": "1f3cec882915b6a4b7372e7307c7f91ecffe0d8ecd27d9db3f38221581921a83",
     "vision.py": "3200d0603d22264121459b4c2f599e5b67233686a473b583a3a7c5e163aa043c",
-    "worker.py": "30f4a87780306e76bf96d0c3c899755e3ed49a6c3fec302e7939ebdddb22f906"
+    "worker.py": "4bd4ff6c8f37816c1dc952b035a28238c1decb836081c35dcdf71e8dd744c60e"
   },
-  "version": "1.1.0"
+  "version": "1.2.0"
 }

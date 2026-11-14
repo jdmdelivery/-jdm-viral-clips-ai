@@ -302,6 +302,94 @@ Clips incluidos: {cantidad}
 """
 
 
+LEEME_PAQUETE = """Paquete de clips de JDM Viral Clips AI para CapCut
+====================================================
+
+¿Qué es este paquete?
+---------------------
+Es un paquete de importación manual para CapCut generado por
+JDM Viral Clips AI. Contiene los clips en MP4 de este proyecto, el
+archivo manifiesto.json con el orden y los datos de cada clip, y este
+LEEME.txt con las instrucciones.
+
+Proyecto: {nombre}
+Carpeta del paquete: {carpeta}
+Clips incluidos: {cantidad}
+
+Cómo importarlo en CapCut
+--------------------------
+1. Abre CapCut y crea un proyecto nuevo en formato vertical 9:16.
+2. Importa los MP4 de esta carpeta (botón Importar) en el orden en
+   que aparecen en manifiesto.json: ese es el orden en el que deben
+   ir en la línea de tiempo.
+3. Arrastra cada clip a la línea de tiempo respetando ese orden.
+4. Usa los campos inicio_s y fin_s de cada clip en manifiesto.json
+   como referencia de dónde iba ese clip en la grabación original
+   (inicio_s es el segundo de inicio y fin_s el segundo de fin en la
+   grabación); duracion_s es su duración en segundos.
+5. Ajusta textos, música y efectos a tu gusto, y exporta el resultado.
+
+Nota sobre el borrador nativo
+-----------------------------
+Si el trabajador ya creó un borrador nativo de CapCut para este
+proyecto, ese borrador es la vía principal y este paquete es el
+respaldo de importación manual: úsalo solo si el borrador no se abre
+o si prefieres montar el proyecto a mano desde los MP4.
+"""
+
+
+def crear_paquete(nombre, items, carpeta_datos):
+    """Paquete de importación manual para CapCut: crea la carpeta
+    <carpeta_datos>/capcut/<nombre saneado>-paquete (única, sin
+    sobrescribir paquetes anteriores), copia dentro cada MP4 cuyo
+    archivo exista, escribe manifiesto.json solo con los clips
+    copiados de verdad y un LEEME.txt en español. Devuelve el Path
+    de la carpeta del paquete."""
+    destino_base = Path(carpeta_datos) / "capcut"
+    destino_base.mkdir(parents=True, exist_ok=True)
+    nombre_paquete = f"{sanear_nombre(nombre)}-paquete"
+    destino = _carpeta_unica(destino_base, nombre_paquete)
+    destino.mkdir(parents=True)
+    clips = []
+    usados = {}
+    for item in items or []:
+        origen = Path(str(item.get("ruta_video", "")))
+        if not origen.is_file():
+            continue
+        nombre_archivo = origen.name
+        if nombre_archivo in usados:
+            usados[nombre_archivo] += 1
+            nombre_final = f"{origen.stem} ({usados[nombre_archivo]}){origen.suffix}"
+            while nombre_final in usados:
+                usados[nombre_archivo] += 1
+                nombre_final = f"{origen.stem} ({usados[nombre_archivo]}){origen.suffix}"
+            usados[nombre_final] = 1
+        else:
+            usados[nombre_archivo] = 1
+            nombre_final = nombre_archivo
+        shutil.copy2(origen, destino / nombre_final)
+        clips.append({
+            "archivo": nombre_final,
+            "titulo": item.get("titulo"),
+            "inicio_s": item.get("inicio_s"),
+            "fin_s": item.get("fin_s"),
+            "duracion_s": item.get("duracion_s"),
+        })
+    manifiesto = {
+        "proyecto": nombre,
+        "generador": "JDM Viral Clips AI",
+        "clips": clips,
+    }
+    (destino / "manifiesto.json").write_text(
+        json.dumps(manifiesto, ensure_ascii=False, indent=2),
+        encoding="utf-8")
+    (destino / "LEEME.txt").write_text(
+        LEEME_PAQUETE.format(nombre=nombre, carpeta=destino.name,
+                             cantidad=len(clips)),
+        encoding="utf-8")
+    return destino
+
+
 def copiar_respaldo(nombre, items, carpeta_datos):
     """Respaldo manual: copia los videos que existan a
     carpeta_datos/capcut/<nombre saneado> con un LEEME.txt en español."""

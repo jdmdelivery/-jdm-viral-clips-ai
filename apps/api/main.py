@@ -52,7 +52,11 @@ class LiveSession(Base):
     __tablename__ = "live_sessions"
     id = Column(Integer, primary_key=True); title = Column(String, nullable=False)
     mode = Column(String, default="general")  # gta | alofoke | podcast | general
-    status = Column(String, default="creada")  # creada|grabando|detenida|error
+    status = Column(String, default="creada")  # creada|iniciando|grabando|deteniendo|detenida|error
+    # Momento en que el trabajador CONFIRMÓ el inicio de la grabación
+    # (complete de «iniciar_grabacion»). En BD existentes lo añade la
+    # auto-migración; create_all lo crea solo en BD nuevas.
+    started_at = Column(DateTime, nullable=True)
     autopilot = Column(Boolean, default=False); min_score = Column(Integer, default=80)
     # Radar en vivo (lote 2026-11-14): el trabajador detecta momentos y genera
     # clips DURANTE la grabación. En BD existentes lo añade la migración 003;
@@ -77,6 +81,10 @@ class Event(Base):
     mode = Column(String, default="general"); start_s = Column(Float, default=0); end_s = Column(Float, default=0)
     score = Column(Integer, default=0, index=True); breakdown = Column(Text, default="{}")
     transcript = Column(Text); status = Column(String, default="detectado")
+    # Momento descartado por el dueño desde el panel: GET /events lo oculta
+    # salvo incluir_descartados=true. En BD existentes lo añade la
+    # auto-migración; create_all lo crea solo en BD nuevas.
+    descartado = Column(Boolean, default=False)
     created_at = Column(DateTime, default=now)
 class Project(Base):
     __tablename__ = "projects"
@@ -148,6 +156,11 @@ _COLUMNAS_POST_001 = [
     # migración 004
     ("workers", "version",
      {"postgresql": "VARCHAR DEFAULT ''", "sqlite": "VARCHAR DEFAULT ''"}),
+    # lote auditoría 2026-11-14: confirmación real de grabación
+    ("live_sessions", "started_at",
+     {"postgresql": "TIMESTAMP", "sqlite": "TIMESTAMP"}),
+    ("events", "descartado",
+     {"postgresql": "BOOLEAN DEFAULT FALSE", "sqlite": "BOOLEAN DEFAULT 0"}),
 ]
 def _auto_migrar_columnas():
     from sqlalchemy import inspect as _sa_inspect, text as _sa_text
@@ -254,6 +267,32 @@ def _en_ventana_horaria(cfg):
         return ini <= t <= fin if ini <= fin else (t >= ini or t <= fin)
     if ini is not None: return t >= ini
     return t <= fin
+def _payload_generar_clip(s, evento):
+    """Payload EXACTO de un job «generar_clip» para un evento: lo usan el
+    piloto automático y los endpoints manuales (POST /events/{id}/clip y
+    POST /sessions/{id}/generar-clips), para que todos encolen lo mismo.
+    file_path se resuelve desde el Project del evento cuando lo tiene."""
+    file_path = None
+    if evento.project_id:
+        proj = s.get(Project, evento.project_id)
+        if proj: file_path = proj.file_path
+    return {
+        "event_id": evento.id, "project_id": evento.project_id, "session_id": evento.session_id,
+        "start_s": evento.start_s, "end_s": evento.end_s, "mode": evento.mode, "file_path": file_path,
+        "type": evento.type, "score": evento.score}
+def _job_generar_clip_activo(s, event_id):
+    """Job «generar_clip» de ese evento en estado pendiente/procesando, o None.
+    Es el criterio anti-duplicados de los endpoints manuales (el piloto usa el
+    suyo propio, más estricto: cualquier job ya existente del evento)."""
+    for j in (s.query(Job).filter_by(type="generar_clip")
+              .filter(Job.status.in_(["pendiente", "procesando"])).order_by(Job.id).all()):
+        try: p = json.loads(j.payload or "{}")
+        except Exception: continue
+        if p.get("event_id") == event_id: return j
+    return None
+def _primer_clip_del_evento(s, event_id):
+    """Primer Clip (por id) asociado a un evento, o None."""
+    return s.query(Clip).filter_by(event_id=event_id).order_by(Clip.id).first()
 def evaluar_piloto(s, evento):
     """Etapa 5 — Piloto Automático: si está activo, el score alcanza el mínimo y la hora
     cae en la ventana, encola UN Job «generar_clip» para el evento (anti-duplicados por
@@ -266,14 +305,7 @@ def evaluar_piloto(s, evento):
         try: p = json.loads(j.payload or "{}")
         except Exception: continue
         if p.get("event_id") == evento.id: return None  # ya existe: anti-duplicados
-    file_path = None
-    if evento.project_id:
-        proj = s.get(Project, evento.project_id)
-        if proj: file_path = proj.file_path
-    job = Job(type="generar_clip", payload=json.dumps({
-        "event_id": evento.id, "project_id": evento.project_id, "session_id": evento.session_id,
-        "start_s": evento.start_s, "end_s": evento.end_s, "mode": evento.mode, "file_path": file_path,
-        "type": evento.type, "score": evento.score}))
+    job = Job(type="generar_clip", payload=json.dumps(_payload_generar_clip(s, evento)))
     s.add(job); s.commit()
     audit(s, "sistema", "piloto_automatico",
           f"Job generar_clip #{job.id} creado para evento {evento.id} (score {evento.score})")
@@ -461,11 +493,11 @@ def workers(user=Depends(current_user), s=Depends(db)):
 def create_session(data: SessionIn, user=Depends(current_user), s=Depends(db)):
     row = LiveSession(title=data.title, mode=data.mode, autopilot=data.autopilot, min_score=data.min_score, user_id=user.id)
     s.add(row); s.commit(); audit(s, user.email, "crear_sesion", data.title)
-    return ser(row, ["id", "title", "mode", "status", "autopilot", "min_score", "radar_activo", "created_at"])
+    return ser(row, ["id", "title", "mode", "status", "autopilot", "min_score", "radar_activo", "created_at", "started_at"])
 @app.get("/sessions")
 def list_sessions(limit: int = 200, offset: int = 0, user=Depends(current_user), s=Depends(db)):
     q = s.query(LiveSession).offset(_clamp_offset(offset)).limit(_clamp_limit(limit))
-    return [ser(r, ["id", "title", "mode", "status", "autopilot", "min_score", "radar_activo", "created_at"]) for r in q]
+    return [ser(r, ["id", "title", "mode", "status", "autopilot", "min_score", "radar_activo", "created_at", "started_at"]) for r in q]
 @app.post("/sessions/{sid}/sources")
 def add_source(sid: int, data: SourceIn, user=Depends(current_user), s=Depends(db)):
     if not s.get(LiveSession, sid): raise HTTPException(404, "Sesión no encontrada")
@@ -481,12 +513,16 @@ def validate_only(sid: int, data: SourceIn, user=Depends(current_user)):
 def start_session(sid: int, user=Depends(current_user), s=Depends(db)):
     row = s.get(LiveSession, sid)
     if not row: raise HTTPException(404, "Sesión no encontrada")
-    # Etapa 6: una sola grabación activa a la vez (hasta demostrar hardware para más).
-    otra = s.query(LiveSession).filter(LiveSession.status == "grabando", LiveSession.id != sid).first()
+    # Etapa 6 + confirmación real: una sola grabación activa a la vez. Bloquea
+    # si otra sesión está grabando O todavía iniciando (el trabajador aún no
+    # confirmó el inicio); «deteniendo» ya no bloquea.
+    otra = s.query(LiveSession).filter(LiveSession.status.in_(["grabando", "iniciando"]), LiveSession.id != sid).first()
     if otra: raise HTTPException(409, f"Ya hay otra sesión grabando («{otra.title}», id {otra.id}). Detenla antes de iniciar esta.")
     src = s.query(Source).filter_by(session_id=sid, allowed=True).first()
     if not src: raise HTTPException(400, "La sesión no tiene una fuente compatible validada. Valida primero una fuente: el enlace del en vivo de una plataforma (YouTube, Facebook, Twitch, TikTok…), un HLS (.m3u8) o un RTMP.")
-    row.status = "grabando"; s.commit()
+    # La sesión NO pasa a «grabando» aquí: queda «iniciando» hasta que el
+    # trabajador confirme completando el job «iniciar_grabacion».
+    row.status = "iniciando"; s.commit()
     job = Job(type="iniciar_grabacion", payload=json.dumps({"session_id": sid, "url": src.url, "mode": row.mode,
                                                             "radar_activo": bool(row.radar_activo)}))
     s.add(job); s.commit(); audit(s, user.email, "iniciar_grabacion", row.title)
@@ -509,7 +545,9 @@ def session_radar(sid: int, data: RadarIn, user=Depends(current_user), s=Depends
 def stop_session(sid: int, user=Depends(current_user), s=Depends(db)):
     row = s.get(LiveSession, sid)
     if not row: raise HTTPException(404, "Sesión no encontrada")
-    row.status = "detenida"; s.commit()
+    # La sesión NO pasa a «detenida» aquí: queda «deteniendo» hasta que el
+    # trabajador confirme completando el job «detener_grabacion».
+    row.status = "deteniendo"; s.commit()
     job = Job(type="detener_grabacion", payload=json.dumps({"session_id": sid})); s.add(job); s.commit()
     return {"ok": True, "status": row.status, "job_id": job.id}
 @app.post("/sessions/{sid}/capcut")
@@ -521,11 +559,18 @@ def session_capcut(sid: int, user=Depends(current_user), s=Depends(db)):
     if not row: raise HTTPException(404, "Sesión no encontrada")
     clips = s.query(Clip).filter_by(session_id=sid).order_by(Clip.id).all()
     if not clips: raise HTTPException(400, "La sesión no tiene clips generados todavía")
+    def _clip_capcut(c):
+        # start_s/end_s salen del Event del clip (clip.event_id) cuando existe.
+        ev = s.get(Event, c.event_id) if c.event_id else None
+        return {"file_path": c.file_path,
+                "title": _primer_titulo_sugerido(c) or c.title or "",
+                "duration_s": c.duration_s,
+                "clip_id": c.id,
+                "start_s": ev.start_s if ev else None,
+                "end_s": ev.end_s if ev else None}
     job = Job(type="enviar_capcut_sesion", payload=json.dumps({
         "session_id": sid, "titulo_sesion": row.title,
-        "clips": [{"file_path": c.file_path,
-                   "title": _primer_titulo_sugerido(c) or c.title or "",
-                   "duration_s": c.duration_s} for c in clips]}))
+        "clips": [_clip_capcut(c) for c in clips]}))
     s.add(job); s.commit()
     audit(s, user.email, "enviar_capcut_sesion", f"sesión {sid} ({len(clips)} clips) -> job {job.id}")
     return {"job_id": job.id, "status": job.status, "clips": len(clips),
@@ -541,7 +586,14 @@ def create_job(data: JobIn, user=Depends(current_user), s=Depends(db)):
 @app.get("/jobs")
 def list_jobs(limit: int = 200, offset: int = 0, user=Depends(current_user), s=Depends(db)):
     q = s.query(Job).order_by(Job.id.desc()).offset(_clamp_offset(offset)).limit(_clamp_limit(limit))
-    return [ser(j, ["id", "type", "status", "attempts", "error", "created_at"]) for j in q]
+    out = []
+    for j in q:
+        d = ser(j, ["id", "type", "status", "attempts", "error", "created_at"])
+        # «result» como JSON ya parseado; None si está vacío o no es JSON válido.
+        try: d["result"] = json.loads(j.result) if j.result else None
+        except Exception: d["result"] = None
+        out.append(d)
+    return out
 @app.post("/jobs/claim")
 def claim_job(w=Depends(worker_auth), s=Depends(db)):
     j = s.query(Job).filter_by(status="pendiente").order_by(Job.id).first()
@@ -554,6 +606,19 @@ def complete_job(jid: int, body: dict, w=Depends(worker_auth), s=Depends(db)):
     if not j: raise HTTPException(404, "Trabajo no encontrado")
     res = body.get("result", {})
     j.status = "completado"; j.result = json.dumps(res); j.error = None; s.commit()
+    # Confirmación real de grabación: solo AHORA la sesión cambia de estado
+    # («iniciando» -> «grabando» con started_at, «deteniendo» -> «detenida»).
+    # Una sesión inexistente (jobs creados a mano) no rompe la compleción.
+    if j.type in ("iniciar_grabacion", "detener_grabacion"):
+        try: _sid_conf = json.loads(j.payload or "{}").get("session_id")
+        except Exception: _sid_conf = None
+        _ses_conf = s.get(LiveSession, _sid_conf) if _sid_conf else None
+        if _ses_conf:
+            if j.type == "iniciar_grabacion":
+                _ses_conf.status = "grabando"; _ses_conf.started_at = now()
+            else:
+                _ses_conf.status = "detenida"
+            s.commit()
     # El trabajador puede reportar eventos y clips reales: se persisten tal cual.
     eventos_persistidos = []
     for ev in res.get("events", []):
@@ -630,6 +695,15 @@ def fail_job(jid: int, body: dict, w=Depends(worker_auth), s=Depends(db)):
     if not j: raise HTTPException(404, "Trabajo no encontrado")
     j.error = str(body.get("error", "error"))[:2000]
     j.status = "pendiente" if j.attempts < 3 else "fallido"; s.commit()
+    # Confirmación real de grabación: SOLO cuando el trabajo queda «fallido»
+    # (intentos agotados) la sesión de iniciar/detener pasa a «error»; mientras
+    # se reintenta (vuelve a «pendiente») la sesión no se toca.
+    if j.status == "fallido" and j.type in ("iniciar_grabacion", "detener_grabacion"):
+        try: _sid_err = json.loads(j.payload or "{}").get("session_id")
+        except Exception: _sid_err = None
+        _ses_err = s.get(LiveSession, _sid_err) if _sid_err else None
+        if _ses_err:
+            _ses_err.status = "error"; s.commit()
     return {"ok": True, "status": j.status}
 
 # Ingesta del radar EN VIVO: el trabajador reporta momentos y clips DURANTE
@@ -683,21 +757,71 @@ def create_event(data: EventIn, user=Depends(current_user), s=Depends(db)):
     evaluar_piloto(s, e)  # Etapa 5: el piloto decide si encola «generar_clip»
     return ser(e, ["id", "type", "mode", "start_s", "end_s", "score", "status"])
 @app.get("/events")
-def list_events(session_id: int | None = None, limit: int = 200, offset: int = 0, user=Depends(current_user), s=Depends(db)):
+def list_events(session_id: int | None = None, incluir_descartados: bool = False, limit: int = 200, offset: int = 0, user=Depends(current_user), s=Depends(db)):
     q = s.query(Event)
     if session_id is not None: q = q.filter_by(session_id=session_id)
+    if not incluir_descartados: q = q.filter((Event.descartado == False) | (Event.descartado.is_(None)))  # noqa: E712
     out = []
     for e in q.order_by(Event.score.desc()).offset(_clamp_offset(offset)).limit(_clamp_limit(limit)):
         d = ser(e, ["id", "session_id", "project_id", "type", "mode", "start_s", "end_s", "score", "status", "created_at"])
-        d["breakdown"] = json.loads(e.breakdown or "{}"); out.append(d)
+        d["breakdown"] = json.loads(e.breakdown or "{}")
+        clip = _primer_clip_del_evento(s, e.id)
+        d["descartado"] = bool(e.descartado)
+        d["duracion_s"] = round((e.end_s or 0) - (e.start_s or 0), 2)
+        d["tiene_clip"] = clip is not None
+        d["clip_id"] = clip.id if clip else None
+        d["clip_file_path"] = clip.file_path if clip else None
+        # Mismo criterio que GET /clips: el archivo existe en ESTE servidor.
+        d["clip_descargable"] = bool(clip and clip.file_path and Path(clip.file_path).exists())
+        out.append(d)
     return out
+@app.post("/events/{eid}/descartar")
+def descartar_evento(eid: int, user=Depends(current_user), s=Depends(db)):
+    e = s.get(Event, eid)
+    if not e: raise HTTPException(404, "Evento no encontrado")
+    e.descartado = True; s.commit()
+    audit(s, user.email, "descartar_evento", f"evento {eid}")
+    return {"ok": True, "id": eid, "descartado": True}
+@app.post("/events/{eid}/clip")
+def clip_de_evento(eid: int, user=Depends(current_user), s=Depends(db)):
+    """Generación manual de UN clip: encola «generar_clip» con el mismo
+    payload que arma el piloto automático para el evento."""
+    e = s.get(Event, eid)
+    if not e: raise HTTPException(404, "Evento no encontrado")
+    if e.descartado: raise HTTPException(400, "Ese momento está descartado: no se le puede generar un clip")
+    clip = _primer_clip_del_evento(s, eid)
+    if clip: raise HTTPException(409, f"Ese momento ya tiene un clip (#{clip.id})")
+    activo = _job_generar_clip_activo(s, eid)
+    if activo: return {"job_id": activo.id, "duplicado": True}
+    job = Job(type="generar_clip", payload=json.dumps(_payload_generar_clip(s, e)))
+    s.add(job); s.commit()
+    audit(s, user.email, "generar_clip_manual", f"evento {eid} -> job {job.id}")
+    return {"job_id": job.id, "duplicado": False}
+@app.post("/sessions/{sid}/generar-clips")
+def generar_clips_sesion(sid: int, user=Depends(current_user), s=Depends(db)):
+    """Encola «generar_clip» para cada evento NO descartado de la sesión que
+    aún no tenga clip ni un job generar_clip pendiente/procesando."""
+    if not s.get(LiveSession, sid): raise HTTPException(404, "Sesión no encontrada")
+    eventos = (s.query(Event).filter_by(session_id=sid)
+               .filter((Event.descartado == False) | (Event.descartado.is_(None)))  # noqa: E712
+               .order_by(Event.id).all())
+    jobs, omitidos = [], 0
+    for e in eventos:
+        if _primer_clip_del_evento(s, e.id) or _job_generar_clip_activo(s, e.id):
+            omitidos += 1; continue
+        job = Job(type="generar_clip", payload=json.dumps(_payload_generar_clip(s, e)))
+        s.add(job); s.commit(); jobs.append(job.id)
+    audit(s, user.email, "generar_clips_sesion", f"sesión {sid}: {len(jobs)} encolados, {omitidos} omitidos")
+    return {"jobs": jobs, "encolados": len(jobs), "omitidos": omitidos, "total_eventos": len(eventos)}
 @app.post("/clips")
 def create_clip(data: ClipIn, user=Depends(current_user), s=Depends(db)):
     c = Clip(**data.model_dump()); s.add(c); s.commit()
     return ser(c, ["id", "file_path", "format", "duration_s", "score", "title", "subtitles", "status"])
 @app.get("/clips")
-def list_clips(limit: int = 200, offset: int = 0, user=Depends(current_user), s=Depends(db)):
-    q = s.query(Clip).order_by(Clip.id.desc()).offset(_clamp_offset(offset)).limit(_clamp_limit(limit))
+def list_clips(session_id: int | None = None, limit: int = 200, offset: int = 0, user=Depends(current_user), s=Depends(db)):
+    q = s.query(Clip)
+    if session_id is not None: q = q.filter_by(session_id=session_id)
+    q = q.order_by(Clip.id.desc()).offset(_clamp_offset(offset)).limit(_clamp_limit(limit))
     out = []
     for c in q:
         d = ser(c, ["id", "event_id", "project_id", "session_id", "file_path", "thumb_path", "format", "duration_s", "score", "title", "subtitles", "status", "created_at"])

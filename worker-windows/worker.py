@@ -5,7 +5,7 @@ Uso: python worker.py --config worker-config.json   (ver README.md)"""
 import argparse, json, os, subprocess, sys, threading, time
 from pathlib import Path
 
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 sys.path.insert(0, str(Path(__file__).parent))
 from sync import ApiClient
 from recorder import Recorder
@@ -62,20 +62,31 @@ def _item_capcut(p, cfg, api):
         except Exception:
             duracion_s = 0
     return {"ruta_video": str(ruta), "titulo": p.get("title") or "Clip",
-            "duracion_s": float(duracion_s or 0)}
+            "duracion_s": float(duracion_s or 0),
+            "inicio_s": p.get("start_s"), "fin_s": p.get("end_s")}
 
 def _enviar_a_capcut(nombre, items, cfg):
-    """Borrador directo si CapCut se detecta; si no, copia de respaldo."""
+    """Borrador directo si CapCut se detecta; si no, copia de respaldo.
+    Después, en ambos casos, crea también el paquete de importación
+    manual (crear_paquete). Si el paquete falla, el borrador o la copia
+    siguen siendo el resultado principal y el error queda anotado."""
     import capcut
     carpeta_borradores = capcut.detectar_carpeta_borradores(cfg)
     if carpeta_borradores is not None:
         ruta = capcut.crear_borrador(nombre, items, carpeta_borradores)
-        return {"capcut": {"borrador": ruta.name, "carpeta": str(ruta),
-                           "clips": len(items), "via": "borrador"}}
-    ruta = capcut.copiar_respaldo(nombre, items, _carpeta_datos(cfg))
-    return {"capcut": {"respaldo": str(ruta), "clips": len(items),
-                       "via": "copia",
-                       "nota": "CapCut no detectado; clips copiados a " + str(ruta)}}
+        resultado = {"capcut": {"borrador": ruta.name, "carpeta": str(ruta),
+                                "clips": len(items), "via": "borrador"}}
+    else:
+        ruta = capcut.copiar_respaldo(nombre, items, _carpeta_datos(cfg))
+        resultado = {"capcut": {"respaldo": str(ruta), "clips": len(items),
+                                "via": "copia",
+                                "nota": "CapCut no detectado; clips copiados a " + str(ruta)}}
+    try:
+        ruta_paquete = capcut.crear_paquete(nombre, items, _carpeta_datos(cfg))
+        resultado["capcut"]["paquete"] = str(ruta_paquete)
+    except Exception as e:
+        resultado["capcut"]["paquete_error"] = str(e)
+    return resultado
 
 def procesar(job, cfg, api=None):
     tipo, p = job["type"], job.get("payload", {})
