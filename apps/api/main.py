@@ -7,7 +7,7 @@ from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
 
 from fastapi import Depends, FastAPI, File, Header, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from sqlalchemy import (Boolean, Column, DateTime, Float, ForeignKey, Integer,
@@ -995,8 +995,110 @@ def stats(user=Depends(current_user), s=Depends(db)):
             "mejor_score": max((e.score for e in eventos), default=0),
             "eventos_sobre_umbral": sum(1 for e in eventos if (e.score or 0) >= umbral)}
 
+# ---------- Páginas legales públicas (Términos y Privacidad) ----------
+_LEGAL_CSS = """
+body{margin:0;background:#0f0f0f;color:#f4f4f5;font-family:system-ui,'Segoe UI',Arial,sans-serif;line-height:1.6}
+.wrap{max-width:780px;margin:0 auto;padding:28px 18px 48px}
+.card{background:#1a1a1d;border:1px solid #2e2e33;border-radius:16px;padding:28px 30px}
+h1{font-size:27px;margin:0 0 4px}
+.bar{height:4px;border-radius:4px;background:linear-gradient(92deg,#ff0033,#ff7a18,#ff2ea6,#a335d6);margin:12px 0 20px}
+h2{font-size:17.5px;margin:22px 0 6px;color:#fff}
+p,li{color:#d6d6dc;font-size:15px}
+a{color:#ff5c7a}
+.meta{color:#a7a7b3;font-size:13.5px}
+.back{display:inline-block;margin-top:22px;font-weight:700}
+"""
+_LEGAL_CONTACTO = "joseluisdiazmartinez90@gmail.com"
+
+def _pagina_legal(titulo: str, cuerpo: str) -> str:
+    return (f"<!DOCTYPE html><html lang=\"es\"><head><meta charset=\"UTF-8\">"
+            f"<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
+            f"<title>{titulo} — JDM Viral Clips AI</title><style>{_LEGAL_CSS}</style></head>"
+            f"<body><div class=\"wrap\"><div class=\"card\"><h1>{titulo}</h1>"
+            f"<p class=\"meta\">JDM Viral Clips AI · Última actualización: 14 de noviembre de 2026</p>"
+            f"<div class=\"bar\"></div>{cuerpo}"
+            f"<a class=\"back\" href=\"/\">← Volver al panel</a>"
+            f"</div></div></body></html>")
+
+@app.get("/terminos", response_class=HTMLResponse)
+def terminos():
+    cuerpo = """
+    <h2>1. Qué es JDM Viral Clips AI</h2>
+    <p>JDM Viral Clips AI es un sistema personal, creado y operado por su propietario, para grabar
+    transmisiones en vivo, detectar momentos destacados y crear clips cortos de video. Funciona con
+    este panel web y con un programa trabajador que se ejecuta en la computadora del propietario,
+    donde se realiza la grabación y el procesamiento de video.</p>
+    <h2>2. Cuenta y acceso</h2>
+    <p>El acceso al panel requiere una cuenta registrada por el propietario. El propietario es
+    responsable de mantener la confidencialidad de su contraseña y del uso que haga del sistema.</p>
+    <h2>3. Contenido y responsabilidad</h2>
+    <p>El propietario decide qué transmisiones graba y qué videos importa al sistema, y es
+    responsable de contar con los derechos o permisos necesarios sobre ese contenido. Las
+    grabaciones de las transmisiones se almacenan en la computadora del propietario.</p>
+    <h2>4. Publicación en redes sociales</h2>
+    <p>El sistema no publica contenido por su cuenta: cada publicación requiere la aprobación del
+    propietario y, cuando se realiza, usa las APIs oficiales de cada plataforma (TikTok, Facebook,
+    Instagram y YouTube) mediante conexiones OAuth autorizadas por el propio propietario.</p>
+    <h2>5. Disponibilidad y resultados</h2>
+    <p>El sistema se ofrece «tal cual», sin garantía de disponibilidad continua. La puntuación de
+    viralidad que muestra el panel es una estimación calculada a partir de señales medibles del
+    video (audio, cambios de escena, duración) y no garantiza vistas ni resultados en ninguna
+    plataforma.</p>
+    <h2>6. Cambios en estos términos</h2>
+    <p>Estos términos pueden actualizarse; la fecha de la última actualización aparece al inicio
+    de esta página.</p>
+    <h2>7. Contacto</h2>
+    <p>Para cualquier pregunta sobre estos términos, escribe a
+    <a href="mailto:joseluisdiazmartinez90@gmail.com">joseluisdiazmartinez90@gmail.com</a>.</p>
+    """
+    return _pagina_legal("Términos de uso", cuerpo)
+
+@app.get("/privacidad", response_class=HTMLResponse)
+def privacidad():
+    cuerpo = """
+    <h2>1. Datos que maneja el sistema</h2>
+    <ul>
+      <li><b>Cuenta del panel:</b> el correo electrónico del propietario y su contraseña, que se
+      guarda con hash (PBKDF2), nunca en texto plano.</li>
+      <li><b>Cuentas de redes sociales conectadas:</b> cuando el propietario conecta TikTok,
+      Facebook, Instagram o YouTube, el sistema guarda los tokens de acceso OAuth cifrados
+      (Fernet) para poder publicar con su autorización. Si el cifrado no está configurado en el
+      servidor, el sistema no almacena esos tokens.</li>
+      <li><b>Actividad y contenido:</b> metadatos de sesiones, fuentes, eventos detectados, clips,
+      trabajos y publicaciones (títulos, duraciones, puntuaciones y estados). Los videos que el
+      propietario importa desde el panel se guardan en el almacenamiento del servicio; las
+      grabaciones de transmisiones en vivo se guardan en la computadora del propietario, donde
+      corre el programa trabajador.</li>
+      <li><b>Sesión en el navegador:</b> el panel guarda el token de acceso en el almacenamiento
+      local del navegador para mantener la sesión iniciada.</li>
+    </ul>
+    <h2>2. Para qué se usan los datos</h2>
+    <p>Los datos se usan únicamente para operar el sistema del propietario: grabar, analizar,
+    crear clips y publicar o programar contenido cuando él lo aprueba.</p>
+    <h2>3. Compartición de datos</h2>
+    <p>No vendemos datos. Solo se envía información a las plataformas que el propietario conecta
+    (al publicar o programar contenido con su aprobación) y a los proveedores de infraestructura
+    donde corre el servicio.</p>
+    <h2>4. Seguridad</h2>
+    <p>Las contraseñas se almacenan con hash y los tokens de las cuentas sociales se almacenan
+    cifrados, como se describe en la sección 1.</p>
+    <h2>5. Derechos del propietario</h2>
+    <p>El propietario puede solicitar el acceso, la corrección o la eliminación de sus datos
+    escribiendo al correo de contacto.</p>
+    <h2>6. Contacto</h2>
+    <p>Para cualquier pregunta sobre esta política, escribe a
+    <a href="mailto:joseluisdiazmartinez90@gmail.com">joseluisdiazmartinez90@gmail.com</a>.</p>
+    """
+    return _pagina_legal("Política de privacidad", cuerpo)
+
 # Panel web estático
 WEB_DIR = BASE_DIR / "apps" / "web"
 @app.get("/")
 def root(): return FileResponse(WEB_DIR / "index.html")
+@app.get("/tiktokwgWIbOYQU4ZZROQ99XH8furOtNXmJ1b9.txt")
+def tiktok_verificacion():
+    # Verificación de sitio de TikTok for Developers: el archivo debe servirse
+    # en la raíz del dominio con su contenido exacto (68 bytes, sin salto final).
+    return FileResponse(WEB_DIR / "tiktokwgWIbOYQU4ZZROQ99XH8furOtNXmJ1b9.txt",
+                        media_type="text/plain; charset=utf-8")
 if WEB_DIR.exists(): app.mount("/static", StaticFiles(directory=WEB_DIR), name="static")

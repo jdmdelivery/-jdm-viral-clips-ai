@@ -9,18 +9,25 @@
 </head>
 <body>
 <div id="login" class="login-box">
-  <h1>🚀 JDM VIRAL CLIPS AI</h1>
+  <div class="brand">
+    <span class="brand-mono" aria-hidden="true">JDM</span>
+    <h1>🚀 <span class="grad-text">JDM VIRAL CLIPS AI</span></h1>
+  </div>
   <p>Graba, detecta, crea y publica clips virales desde un solo sistema.</p>
   <input id="li-email" type="email" placeholder="Correo">
   <input id="li-pass" type="password" placeholder="Contraseña (mín. 8)">
   <button onclick="entrar()">ENTRAR</button>
   <button class="sec" onclick="registrarse()">CREAR CUENTA</button>
   <p id="li-msg" class="msg"></p>
+  <p class="legal-links"><a href="/terminos">Términos de uso</a> · <a href="/privacidad">Política de privacidad</a></p>
 </div>
 
 <div id="app" class="oculto">
   <aside>
-    <h2>🚀 JDM VIRAL<br>CLIPS AI</h2>
+    <div class="brand">
+      <span class="brand-mono sm" aria-hidden="true">JDM</span>
+      <h2>🚀 <span class="grad-text">JDM VIRAL</span><br>CLIPS AI</h2>
+    </div>
     <nav id="menu"></nav>
     <p class="usr" id="usr"></p>
     <button class="sec" onclick="salir()">Cerrar sesión</button>
@@ -33,7 +40,7 @@
     </section>
 
     <section data-sec="centro" class="oculto">
-      <h3>🔴 CENTRO DE TRANSMISIONES EN VIVO</h3>
+      <h3>🔴 CENTRO DE TRANSMISIONES EN VIVO <span class="live-pill"><span class="live-dot"></span>EN VIVO</span></h3>
       <div class="grid2">
         <div>
           <input id="ss-titulo" placeholder="Título de la sesión (ej.: Alofoke LIVE)">
@@ -51,8 +58,8 @@
             <button class="rojo" onclick="iniciarGrab()">⏺ INICIAR GRABACIÓN</button>
             <button onclick="activarRadar()">📡 ACTIVAR RADAR VIRAL</button>
             <button onclick="ir('radar')">🔥 VER MOMENTOS DETECTADOS</button>
-            <button onclick="ir('analizar')">🎬 GENERAR CLIPS</button>
-            <button onclick="ir('publicar')">📤 PUBLICAR CLIP</button>
+            <button class="grad" onclick="ir('analizar')">🎬 GENERAR CLIPS</button>
+            <button class="grad" onclick="ir('publicar')">📤 PUBLICAR CLIP</button>
             <button class="rojo" onclick="detenerGrab()">⏹ DETENER GRABACIÓN</button>
           </div>
           <p id="live-msg" class="msg"></p>
