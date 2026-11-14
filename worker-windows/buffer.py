@@ -13,6 +13,10 @@ class BufferCircular:
             self.manifest_path.write_text("[]", encoding="utf-8")
     def _manifest(self):
         return json.loads(self.manifest_path.read_text(encoding="utf-8-sig"))
+    def segmentos(self):
+        """Manifest actual: los segmentos YA finalizados con su línea de
+        tiempo real (inicio_s/duracion_s medidos). Lo usa el radar en vivo."""
+        return self._manifest()
     def registrar(self, path, indice, inicio_s, duracion_s=10):
         m = self._manifest()
         m.append({"path": str(path), "indice": indice, "inicio_s": inicio_s,

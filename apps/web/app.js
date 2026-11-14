@@ -56,7 +56,7 @@ async function crearSesion() {
 }
 async function cargarSesiones() {
   try { const ss = await api("GET", "/sessions");
-    $("ss-lista").innerHTML = ss.map(s => `<option value="${s.id}">#${s.id} ${esc(s.title)} — ${esc(s.status)}</option>`).join("") || "<option value=''>Sin sesiones</option>";
+    $("ss-lista").innerHTML = ss.map(s => `<option value="${s.id}">#${s.id} ${esc(s.title)} — ${esc(s.status)}${s.radar_activo ? " · 📡 radar" : ""}</option>`).join("") || "<option value=''>Sin sesiones</option>";
   } catch (e) {}
 }
 function sesionId() { return $("ss-lista").value; }
@@ -64,7 +64,9 @@ async function cargarSesion() {}
 async function validarFuente() {
   const sid = sesionId(); if (!sid) { $("src-msg").textContent = "Crea y selecciona una sesión primero."; return; }
   try { const d = await api("POST", `/sessions/${sid}/sources`, {url: $("src-url").value});
-    $("src-msg").textContent = (d.allowed ? "✅ Compatible: " : "⛔ No grabable así: ") + d.explanation; }
+    // La explicación de la API ya trae el texto completo («Compatible: tu PC
+    // resuelve la señal…» en plataformas, «Fuente compatible…» en directas).
+    $("src-msg").textContent = (d.allowed ? "✅ " : "⛔ No grabable así: ") + d.explanation; }
   catch (e) { $("src-msg").textContent = e.message; }
 }
 function abrirLive() {
@@ -79,7 +81,18 @@ async function iniciarGrab() {
     $("live-msg").textContent = "Grabación solicitada (trabajo #" + d.job_id + "). La ejecuta el trabajador; sin trabajador conectado queda pendiente."; }
   catch (e) { $("live-msg").textContent = e.message; }
 }
-function activarRadar() { $("live-msg").textContent = "El radar en vivo llega en la próxima actualización; hoy el análisis corre al detener la grabación o al importar el video. Los momentos detectados aparecen en «LIVE VIRAL RADAR»."; }
+async function activarRadar() {
+  const sid = sesionId(); if (!sid) { $("live-msg").textContent = "Crea y selecciona una sesión primero."; return; }
+  try { const ss = await api("GET", "/sessions");
+    const ses = ss.find(x => x.id == sid);
+    const nuevo = !(ses && ses.radar_activo);
+    const d = await api("POST", `/sessions/${sid}/radar`, {activo: nuevo});
+    $("live-msg").textContent = d.radar_activo
+      ? "📡 Radar en vivo ACTIVADO en la sesión #" + sid + " (trabajo #" + d.job_id + "). Mientras grabes, los momentos irán apareciendo en «LIVE VIRAL RADAR» con sus clips."
+      : "Radar en vivo DESACTIVADO en la sesión #" + sid + ".";
+    cargarSesiones();
+  } catch (e) { $("live-msg").textContent = e.message; }
+}
 async function detenerGrab() {
   try { const d = await api("POST", `/sessions/${sesionId()}/stop`);
     $("live-msg").textContent = "Detención solicitada (trabajo #" + d.job_id + "). Los segmentos ya guardados no se pierden."; cargarSesiones(); }
@@ -87,7 +100,8 @@ async function detenerGrab() {
 }
 // Radar / eventos
 async function cargarEventos() {
-  try { const ev = await api("GET", "/events");
+  try { const sel = $("ss-lista"); const sid = sel && sel.value ? sel.value : "";
+    const ev = await api("GET", sid ? `/events?session_id=${sid}` : "/events");
     $("eventos").innerHTML = tabla(ev, [["Tipo", r => esc(r.type)], ["Modo", r => esc(r.mode)], ["Inicio", r => r.start_s + "s"], ["Fin", r => r.end_s + "s"], ["Puntuación", r => `<span class='score'>${r.score}/100</span>`], ["Estado", r => esc(r.status)], ["Acciones", r => `<button onclick="ir('publicar')">PUBLICAR</button>`]]);
   } catch (e) { $("eventos").innerHTML = esc(e.message); }
 }

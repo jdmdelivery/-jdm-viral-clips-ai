@@ -13,6 +13,10 @@ Set-Location $dir
 python -m venv .venv
 & .\.venv\Scripts\pip install --upgrade pip
 & .\.venv\Scripts\pip install -r requirements.txt
+# Verificacion: yt-dlp es obligatorio (resolver.py graba desde enlaces de
+# plataformas: YouTube, Facebook, Twitch...). Si el import falla, el
+# instalador se detiene aqui en vez de dejar un trabajador a medias.
+& .\.venv\Scripts\python -c "import yt_dlp; print('yt-dlp OK', yt_dlp.version.__version__)"
 Write-Host "Opcional (transcripcion local): .venv\Scripts\pip install faster-whisper"
 # Modelo YuNet (deteccion de rostros, OpenCV Zoo oficial): es un artefacto de
 # ejecucion que NO se versiona en Git; se descarga aqui si falta.

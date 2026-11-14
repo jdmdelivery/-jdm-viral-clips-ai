@@ -36,9 +36,10 @@ def test_validacion_fuentes():
     # loopback
     r = client.post(f"/sessions/{sid}/sources", json={"url": "http://127.0.0.1:8080/x.m3u8"}, headers=h).json()
     assert r["allowed"] is False
-    # YouTube: explicación clara, no grabable directo
+    # YouTube (regla de Jose, 2026-11-14): el enlace de plataforma SE ACEPTA
+    # como fuente «plataforma»; la señal la resuelve el trabajador en su PC.
     r = client.post(f"/sessions/{sid}/sources", json={"url": "https://www.youtube.com/watch?v=abc"}, headers=h).json()
-    assert r["allowed"] is False and "OBS" in r["explanation"]
+    assert r["allowed"] is True and r["kind"] == "plataforma" and "resuelve la señal" in r["explanation"]
     # file:// rechazado
     r = client.post(f"/sessions/{sid}/sources", json={"url": "file:///etc/passwd"}, headers=h).json()
     assert r["allowed"] is False

@@ -29,8 +29,13 @@ def _cmd_grabar(fuente, outdir, start_number=0, en_vivo=False):
     return cmd
 
 class Recorder:
-    def __init__(self, fuente, outdir, buffer_min=5, en_vivo=True, max_reintentos=5):
+    def __init__(self, fuente, outdir, buffer_min=5, en_vivo=True, max_reintentos=5, resolver=None):
+        # resolver (opcional): callable sin argumentos que devuelve una URL de
+        # señal FRESCA. Las señales resueltas de plataformas rotan/caducan;
+        # en cada reconexión se pide una nueva en vez de reutilizar la muerta.
+        # Sin resolver, el comportamiento es idéntico al histórico.
         self.fuente, self.outdir = fuente, Path(outdir)
+        self.resolver = resolver
         self.outdir.mkdir(parents=True, exist_ok=True)
         self.buffer = BufferCircular(self.outdir, minutos=buffer_min)
         self.en_vivo, self.max_reintentos = en_vivo, max_reintentos
@@ -55,6 +60,15 @@ class Recorder:
         for p in self._segmentos():
             if p.name not in self._finalizados:
                 self._finalizar(p)
+    def _refrescar_fuente(self):
+        """Pide una URL fresca al resolver (si hay). Si el resolver falla, se
+        conserva la última URL conocida y el reintento sigue su curso."""
+        if not self.resolver: return
+        try:
+            nueva = self.resolver()
+            if nueva: self.fuente = nueva
+        except Exception:
+            pass
     def _bucle(self):
         self.inicio = time.time()
         vistos = set()
@@ -73,6 +87,7 @@ class Recorder:
             self.reintentos += 1
             if self.reintentos > self.max_reintentos: break
             start_number = len(segs)
+            self._refrescar_fuente()  # señal de plataforma: URL fresca, no la caducada
             time.sleep(2)
     def start(self):
         self.hilo = threading.Thread(target=self._bucle, daemon=True); self.hilo.start()

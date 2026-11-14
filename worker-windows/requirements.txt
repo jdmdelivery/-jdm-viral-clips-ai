@@ -1,4 +1,10 @@
 requests
+yt-dlp
+# yt-dlp: OBLIGATORIO desde el lote 2026-11-14 — resuelve en la PC los
+# enlaces de plataformas (YouTube/Facebook/Twitch/…) a la señal grabable
+# (worker-windows/resolver.py). Verificado en la VM de desarrollo:
+# yt-dlp 2026.10.26 importa y resuelve (con la salvedad del muro de
+# YouTube para IPs de datacenter; en la PC residencial de Jose no aplica).
 # Opcionales (la app degrada con honestidad si no están):
 # faster-whisper
 # opencv-python

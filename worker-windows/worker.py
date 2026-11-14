@@ -8,8 +8,20 @@ sys.path.insert(0, str(Path(__file__).parent))
 from sync import ApiClient
 from recorder import Recorder
 from analyzer import analizar_video
+from resolver import resolver_fuente, es_pagina_plataforma
+from radar import RadarSesion
 
 grabaciones = {}  # session_id -> Recorder
+radares = {}      # session_id -> RadarSesion (radar en vivo activo)
+
+def _activar_radar(sid, rec, cfg, api, modo="general"):
+    if sid in radares: return radares[sid]
+    radar = RadarSesion(rec, sid, api, Path(cfg["carpeta_clips"]), modo=modo,
+                        umbral=int(cfg.get("radar_umbral", 80)),
+                        intervalo_s=float(cfg.get("radar_intervalo_s", 30)),
+                        pre_s=cfg.get("pre_s", 20), post_s=cfg.get("post_s", 15))
+    radar.start(); radares[sid] = radar
+    return radar
 
 def resolver_archivo(p, cfg, api=None):
     """Resuelve la fuente del análisis en la arquitectura híbrida:
@@ -35,14 +47,49 @@ def procesar(job, cfg, api=None):
     tipo, p = job["type"], job.get("payload", {})
     if tipo == "iniciar_grabacion":
         sid = p["session_id"]
-        rec = Recorder(p["url"], Path(cfg["carpeta_grabaciones"]) / f"sesion-{sid}",
-                       buffer_min=cfg.get("buffer_min", 5), en_vivo=True)
+        url = p["url"]
+        # Regla de Jose (2026-11-14): los enlaces de plataformas se resuelven
+        # AQUÍ, en la PC, ANTES de grabar (resolver.py/yt-dlp). Si la señal no
+        # se puede obtener, resolver_fuente lanza ErrorResolucion con el
+        # motivo honesto y el trabajo falla con ese mensaje — nunca se finge
+        # una grabación. Al Recorder se le pasa un callable de re-resolución
+        # para las reconexiones (las URLs de señal de plataformas caducan).
+        senal = resolver_fuente(url)
+        refrescar = (lambda: resolver_fuente(url)) if es_pagina_plataforma(url) else None
+        rec = Recorder(senal, Path(cfg["carpeta_grabaciones"]) / f"sesion-{sid}",
+                       buffer_min=cfg.get("buffer_min", 5), en_vivo=True, resolver=refrescar)
         rec.start(); grabaciones[sid] = rec
-        return {"estado": "grabando", "nota": "Grabación iniciada en proceso separado; sigue aunque se procesen clips."}
+        nota = "Grabación iniciada en proceso separado; sigue aunque se procesen clips."
+        if refrescar: nota += " Señal resuelta desde el enlace de la plataforma en esta PC."
+        if p.get("radar_activo") or p.get("radar"):
+            _activar_radar(sid, rec, cfg, api, p.get("mode", "general"))
+            nota += " Radar en vivo ACTIVADO."
+        return {"estado": "grabando", "nota": nota}
+    if tipo == "radar_sesion":
+        # Enciende/apaga el radar en vivo de la grabación en curso de la sesión.
+        sid = p["session_id"]; activo = bool(p.get("activo"))
+        if not activo:
+            radar = radares.pop(sid, None)
+            if radar: radar.detener()
+            return {"estado": "radar_desactivado", "radar_activo": False}
+        rec = grabaciones.get(sid)
+        if not rec:
+            return {"estado": "sin_grabacion_activa", "radar_activo": False,
+                    "nota": "En este trabajador no hay grabación en curso de esa sesión. "
+                            "El panel ya dejó el radar activado: se encenderá solo al "
+                            "iniciar la grabación."}
+        _activar_radar(sid, rec, cfg, api, p.get("mode", "general"))
+        return {"estado": "radar_activado", "radar_activo": True}
     if tipo == "detener_grabacion":
-        rec = grabaciones.pop(p["session_id"], None)
+        sid = p["session_id"]
+        rec = grabaciones.pop(sid, None)
         if not rec: return {"estado": "sin_grabacion_activa"}
-        return {"estado": "detenida", "grabacion_completa": rec.stop()}
+        completa = rec.stop()
+        # El radar se detiene DESPUÉS de unir la grabación: su pasada final
+        # revisa también el último segmento y reporta lo que quedara abierto.
+        radar = radares.pop(sid, None)
+        if radar: radar.detener()
+        return {"estado": "detenida", "grabacion_completa": completa}
     if tipo == "analizar_video":
         salida = Path(cfg["carpeta_clips"]) / f"proyecto-{p.get('project_id', 'x')}"
         r = analizar_video(resolver_archivo(p, cfg, api), salida, modo=p.get("mode", "general"),

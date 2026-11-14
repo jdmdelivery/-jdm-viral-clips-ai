@@ -31,6 +31,14 @@ class ApiClient:
                     if chunk: f.write(chunk)
         parcial.replace(destino)
         return destino
+    def reportar_en_vivo(self, session_id, events, clips):
+        """Ingesta del radar EN VIVO: eventos y clips detectados DURANTE la
+        grabación (POST /workers/sessions/{id}/live-events, token de
+        trabajador). Devuelve el resumen de la API (guardados/duplicados)."""
+        r = self._req("POST", f"/workers/sessions/{session_id}/live-events",
+                      json={"events": events, "clips": clips})
+        r.raise_for_status()
+        return r.json()
     def reclamar(self):
         r = self._req("POST", "/jobs/claim")
         r.raise_for_status()

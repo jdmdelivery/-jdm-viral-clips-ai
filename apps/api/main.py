@@ -51,6 +51,10 @@ class LiveSession(Base):
     mode = Column(String, default="general")  # gta | alofoke | podcast | general
     status = Column(String, default="creada")  # creada|grabando|detenida|error
     autopilot = Column(Boolean, default=False); min_score = Column(Integer, default=80)
+    # Radar en vivo (lote 2026-11-14): el trabajador detecta momentos y genera
+    # clips DURANTE la grabación. En BD existentes lo añade la migración 003;
+    # create_all lo crea solo en BD nuevas.
+    radar_activo = Column(Boolean, default=False)
     created_at = Column(DateTime, default=now); user_id = Column(Integer, ForeignKey("users.id"))
 class Source(Base):
     __tablename__ = "sources"
@@ -238,7 +242,20 @@ def _login_registrar_fallo(clave):
     _LOGIN_FALLOS.setdefault(clave, []).append(time.time())
 
 # ---------- Validación de fuentes (anti-SSRF) ----------
-PLATAFORMAS_DIRECTAS = ("youtube.com", "youtu.be", "tiktok.com", "facebook.com", "instagram.com", "twitch.tv")
+# Regla de Jose (2026-11-14): «quiero que grabe todos los en vivo de todas
+# las plataformas». Los enlaces de PÁGINAS de plataformas conocidas se
+# aceptan como fuente tipo «plataforma»: la API no resuelve nada — es el
+# trabajador, en la PC de Jose, quien obtiene la señal real al momento de
+# grabar (worker-windows/resolver.py, con yt-dlp). Las señales directas
+# (.m3u8, rtmp://, archivos) siguen como siempre, y la protección anti-SSRF
+# se mantiene para todo lo demás. El emparejado de dominios es exacto o por
+# subdominio (nada de «youtube.com.evil.com» ni «notyoutube.com»).
+DOMINIOS_PLATAFORMA = ("youtube.com", "youtu.be", "facebook.com", "fb.watch",
+                       "twitch.tv", "tiktok.com", "instagram.com", "x.com", "twitter.com")
+def _es_dominio(host, dominio):
+    return host == dominio or host.endswith("." + dominio)
+def _es_plataforma(host):
+    return any(_es_dominio(host, d) for d in DOMINIOS_PLATAFORMA)
 def _ip_privada(ip_str):
     try: ip = ipaddress.ip_address(ip_str)
     except ValueError: return True
@@ -255,12 +272,15 @@ def validate_source(url: str):
     if host in ("localhost",) or host.endswith(".local") or host.endswith(".internal"):
         return False, "bloqueado", "Host local/interno bloqueado por seguridad (anti-SSRF)."
     kind = "hls" if ".m3u8" in p.path else ("rtmp" if p.scheme.startswith("rtmp") else ("srt" if p.scheme == "srt" else "http"))
-    # Plataformas conocidas: explicación específica ANTES del chequeo DNS (son dominios públicos conocidos).
-    if any(d in host for d in PLATAFORMAS_DIRECTAS):
-        return False, kind, ("Esta plataforma no permite grabación directa desde enlaces públicos sin su API oficial "
-                             "o sin ser el dueño del LIVE. Alternativas autorizadas: transmite TÚ el LIVE y envíalo por "
-                             "RTMP/HLS propio, abre tu propio LIVE en OBS y conecta OBS como fuente, o importa un video "
-                             "del que tengas permiso. No evadimos DRM ni controles de acceso.")
+    # Páginas de plataformas conocidas (regla de Jose): se aceptan como
+    # «plataforma» ANTES del chequeo DNS — son dominios públicos conocidos y
+    # la señal la resuelve el trabajador en su PC, no este servidor. Una
+    # señal directa (.m3u8/rtmp/srt) nunca pasa por esta rama.
+    es_directa = ".m3u8" in p.path or p.scheme in ("rtmp", "rtmps", "srt")
+    if not es_directa and p.scheme in ("http", "https") and _es_plataforma(host):
+        return True, "plataforma", ("Compatible: tu PC resuelve la señal al momento de grabar. "
+                                    "Al iniciar la grabación, el trabajador obtiene la señal real "
+                                    "del en vivo desde el enlace de la plataforma.")
     try:
         ipaddress.ip_address(host)
         if _ip_privada(host):
@@ -306,6 +326,16 @@ class AutopilotIn(BaseModel):
     activo: bool | None = None; min_score: int | None = None
     plataformas: list | None = None; hora_inicio: str | None = None
     hora_fin: str | None = None; timezone: str | None = None
+class RadarIn(BaseModel): activo: bool
+class LiveEventIn(BaseModel):
+    start_s: float = 0; end_s: float = 0; type: str = "general"; mode: str = "general"
+    score: int = 0; breakdown: dict = {}
+class LiveClipIn(BaseModel):
+    event_index: int | None = None; start_s: float | None = None
+    file_path: str | None = None; format: str = "9:16"; duration_s: float | None = None
+    score: int = 0; title: str | None = None; titles: dict = {}; subtitles: bool = False
+class LiveIngestIn(BaseModel):
+    events: list[LiveEventIn] = []; clips: list[LiveClipIn] = []
 class CalendarIn(BaseModel): publication_id: int; when_at: str; note: str = ""
 class CalendarUpdateIn(BaseModel): when_at: str | None = None; note: str | None = None
 
@@ -372,11 +402,11 @@ def workers(user=Depends(current_user), s=Depends(db)):
 def create_session(data: SessionIn, user=Depends(current_user), s=Depends(db)):
     row = LiveSession(title=data.title, mode=data.mode, autopilot=data.autopilot, min_score=data.min_score, user_id=user.id)
     s.add(row); s.commit(); audit(s, user.email, "crear_sesion", data.title)
-    return ser(row, ["id", "title", "mode", "status", "autopilot", "min_score", "created_at"])
+    return ser(row, ["id", "title", "mode", "status", "autopilot", "min_score", "radar_activo", "created_at"])
 @app.get("/sessions")
 def list_sessions(limit: int = 200, offset: int = 0, user=Depends(current_user), s=Depends(db)):
     q = s.query(LiveSession).offset(_clamp_offset(offset)).limit(_clamp_limit(limit))
-    return [ser(r, ["id", "title", "mode", "status", "autopilot", "min_score", "created_at"]) for r in q]
+    return [ser(r, ["id", "title", "mode", "status", "autopilot", "min_score", "radar_activo", "created_at"]) for r in q]
 @app.post("/sessions/{sid}/sources")
 def add_source(sid: int, data: SourceIn, user=Depends(current_user), s=Depends(db)):
     if not s.get(LiveSession, sid): raise HTTPException(404, "Sesión no encontrada")
@@ -396,11 +426,26 @@ def start_session(sid: int, user=Depends(current_user), s=Depends(db)):
     otra = s.query(LiveSession).filter(LiveSession.status == "grabando", LiveSession.id != sid).first()
     if otra: raise HTTPException(409, f"Ya hay otra sesión grabando («{otra.title}», id {otra.id}). Detenla antes de iniciar esta.")
     src = s.query(Source).filter_by(session_id=sid, allowed=True).first()
-    if not src: raise HTTPException(400, "La sesión no tiene una fuente AUTORIZADA y compatible. Valida primero una fuente RTMP/HLS propia.")
+    if not src: raise HTTPException(400, "La sesión no tiene una fuente compatible validada. Valida primero una fuente: el enlace del en vivo de una plataforma (YouTube, Facebook, Twitch, TikTok…), un HLS (.m3u8) o un RTMP.")
     row.status = "grabando"; s.commit()
-    job = Job(type="iniciar_grabacion", payload=json.dumps({"session_id": sid, "url": src.url, "mode": row.mode}))
+    job = Job(type="iniciar_grabacion", payload=json.dumps({"session_id": sid, "url": src.url, "mode": row.mode,
+                                                            "radar_activo": bool(row.radar_activo)}))
     s.add(job); s.commit(); audit(s, user.email, "iniciar_grabacion", row.title)
     return {"ok": True, "status": row.status, "job_id": job.id}
+@app.post("/sessions/{sid}/radar")
+def session_radar(sid: int, data: RadarIn, user=Depends(current_user), s=Depends(db)):
+    """Radar en vivo ON/OFF. Elección de consistencia: FLAG INMEDIATO + job.
+    El flag radar_activo se actualiza en el acto (el panel muestra el estado
+    real sin esperar) y el job «radar_sesion» es lo que enciende/apaga el
+    radar en el trabajador; si no hay grabación en curso, el trabajador lo
+    reporta en el resultado del job y el radar se activará al iniciar la
+    grabación (el payload de iniciar_grabacion lleva el flag)."""
+    row = s.get(LiveSession, sid)
+    if not row: raise HTTPException(404, "Sesión no encontrada")
+    row.radar_activo = bool(data.activo); s.commit()
+    job = Job(type="radar_sesion", payload=json.dumps({"session_id": sid, "activo": bool(data.activo), "mode": row.mode}))
+    s.add(job); s.commit(); audit(s, user.email, "radar_sesion", f"sesión {sid} -> {'ACTIVO' if data.activo else 'INACTIVO'}")
+    return {"ok": True, "radar_activo": row.radar_activo, "job_id": job.id}
 @app.post("/sessions/{sid}/stop")
 def stop_session(sid: int, user=Depends(current_user), s=Depends(db)):
     row = s.get(LiveSession, sid)
@@ -508,6 +553,49 @@ def fail_job(jid: int, body: dict, w=Depends(worker_auth), s=Depends(db)):
     j.status = "pendiente" if j.attempts < 3 else "fallido"; s.commit()
     return {"ok": True, "status": j.status}
 
+# Ingesta del radar EN VIVO: el trabajador reporta momentos y clips DURANTE
+# la grabación (sin esperar a detenerla). Dedup de eventos por solape >70%
+# del intervalo menor contra los ya guardados de la sesión — mismo criterio
+# que worker-windows/dedup.py (función espejo _solape_ratio).
+def _solape_ratio(a_ini, a_fin, b_ini, b_fin):
+    inter = min(a_fin, b_fin) - max(a_ini, b_ini)
+    if inter <= 0: return 0.0
+    menor = min(a_fin - a_ini, b_fin - b_ini)
+    return inter / menor if menor > 0 else 0.0
+@app.post("/workers/sessions/{sid}/live-events")
+def live_events_ingest(sid: int, data: LiveIngestIn, w=Depends(worker_auth), s=Depends(db)):
+    ses = s.get(LiveSession, sid)
+    if not ses: raise HTTPException(404, "Sesión no encontrada")
+    existentes = s.query(Event).filter_by(session_id=sid).order_by(Event.id).all()
+    ids_por_indice = {}  # índice del payload -> Event.id (nuevo o el duplicado ya guardado)
+    guardados = duplicados = 0
+    for i, ev in enumerate(data.events):
+        dup = None
+        for e in existentes:
+            if _solape_ratio(ev.start_s, ev.end_s, e.start_s, e.end_s) > 0.70:
+                dup = e; break
+        if dup is not None:
+            ids_por_indice[i] = dup.id; duplicados += 1; continue
+        e = Event(session_id=sid, type=ev.type, mode=ev.mode, start_s=ev.start_s, end_s=ev.end_s,
+                  score=int(ev.score), breakdown=json.dumps(ev.breakdown))
+        s.add(e); s.commit(); existentes.append(e); ids_por_indice[i] = e.id; guardados += 1
+        try: evaluar_piloto(s, e)  # el piloto también aplica a momentos en vivo
+        except Exception: pass
+    clips_guardados = 0
+    for cl in data.clips:
+        ev_id = None
+        if cl.event_index is not None: ev_id = ids_por_indice.get(cl.event_index)
+        if ev_id is None and cl.start_s is not None:
+            for idx, ev in enumerate(data.events):
+                if abs(ev.start_s - cl.start_s) < 0.01:
+                    ev_id = ids_por_indice.get(idx); break
+        c = Clip(event_id=ev_id, session_id=sid, file_path=cl.file_path, format=cl.format,
+                 duration_s=cl.duration_s, score=int(cl.score), title=cl.title,
+                 titles_json=json.dumps(cl.titles or {}), subtitles=bool(cl.subtitles))
+        s.add(c); s.commit(); clips_guardados += 1
+    return {"ok": True, "eventos_guardados": guardados, "eventos_duplicados": duplicados,
+            "clips_guardados": clips_guardados}
+
 # Eventos y clips
 @app.post("/events")
 def create_event(data: EventIn, user=Depends(current_user), s=Depends(db)):
@@ -516,9 +604,11 @@ def create_event(data: EventIn, user=Depends(current_user), s=Depends(db)):
     evaluar_piloto(s, e)  # Etapa 5: el piloto decide si encola «generar_clip»
     return ser(e, ["id", "type", "mode", "start_s", "end_s", "score", "status"])
 @app.get("/events")
-def list_events(limit: int = 200, offset: int = 0, user=Depends(current_user), s=Depends(db)):
+def list_events(session_id: int | None = None, limit: int = 200, offset: int = 0, user=Depends(current_user), s=Depends(db)):
+    q = s.query(Event)
+    if session_id is not None: q = q.filter_by(session_id=session_id)
     out = []
-    for e in s.query(Event).order_by(Event.score.desc()).offset(_clamp_offset(offset)).limit(_clamp_limit(limit)):
+    for e in q.order_by(Event.score.desc()).offset(_clamp_offset(offset)).limit(_clamp_limit(limit)):
         d = ser(e, ["id", "session_id", "project_id", "type", "mode", "start_s", "end_s", "score", "status", "created_at"])
         d["breakdown"] = json.loads(e.breakdown or "{}"); out.append(d)
     return out
