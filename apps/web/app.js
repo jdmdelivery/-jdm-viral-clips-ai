@@ -68,7 +68,8 @@ async function validarFuente() {
   catch (e) { $("src-msg").textContent = e.message; }
 }
 function abrirLive() {
-  const url = $("src-url").value, v = $("player");
+  const url = $("src-url").value.trim(), v = $("player");
+  if (!url) { $("live-msg").textContent = "Pega primero el enlace de la fuente (HLS .m3u8, RTMP…) en el campo de la fuente."; return; }
   if (window.Hls && Hls.isSupported() && url.includes(".m3u8")) { const h = new Hls(); h.loadSource(url); h.attachMedia(v); }
   else { v.src = url; }
   v.play().catch(() => { $("live-msg").textContent = "El navegador no pudo reproducir la fuente (puede requerir CORS o no ser compatible). La grabación la hace el trabajador con FFmpeg."; });
@@ -78,7 +79,7 @@ async function iniciarGrab() {
     $("live-msg").textContent = "Grabación solicitada (trabajo #" + d.job_id + "). La ejecuta el trabajador; sin trabajador conectado queda pendiente."; }
   catch (e) { $("live-msg").textContent = e.message; }
 }
-function activarRadar() { $("live-msg").textContent = "RADAR VIRAL activo para esta sesión: el trabajador analizará los segmentos mientras graba. Los momentos aparecerán en LIVE VIRAL RADAR."; ir("radar"); }
+function activarRadar() { $("live-msg").textContent = "El radar en vivo llega en la próxima actualización; hoy el análisis corre al detener la grabación o al importar el video. Los momentos detectados aparecen en «LIVE VIRAL RADAR»."; }
 async function detenerGrab() {
   try { const d = await api("POST", `/sessions/${sesionId()}/stop`);
     $("live-msg").textContent = "Detención solicitada (trabajo #" + d.job_id + "). Los segmentos ya guardados no se pierden."; cargarSesiones(); }
@@ -92,7 +93,7 @@ async function cargarEventos() {
 }
 // Proyectos / analizar
 async function importar() {
-  const f = $("imp-file").files[0]; if (!f) return;
+  const f = $("imp-file").files[0]; if (!f) { $("imp-msg").textContent = "Elige primero un archivo de video (MP4, MOV o MKV)."; return; }
   const fd = new FormData(); fd.append("file", f);
   try { const r = await fetch("/projects/import", {method: "POST", headers: {"Authorization": "Bearer " + token}, body: fd});
     const d = await r.json(); if (!r.ok) throw new Error(d.detail || "Error");
@@ -119,7 +120,7 @@ async function analizar(pid) {
 let clipsCache = [];
 async function cargarClips() {
   try { clipsCache = await api("GET", "/clips");
-    $("clips").innerHTML = tabla(clipsCache, [["Clip", r => "#" + r.id + " " + esc(r.title || "")], ["Formato", r => esc(r.format)], ["Duración", r => r.duration_s + "s"], ["Score", r => `<span class='score'>${r.score}/100</span>`], ["Subtítulos", r => r.subtitles ? "Sí" : "No"], ["Acciones", r => `<button onclick="descargar(${r.id})">DESCARGAR</button>`]]);
+    $("clips").innerHTML = tabla(clipsCache, [["Clip", r => "#" + r.id + " " + esc(r.title || "")], ["Formato", r => esc(r.format)], ["Duración", r => r.duration_s + "s"], ["Score", r => `<span class='score'>${r.score}/100</span>`], ["Subtítulos", r => r.subtitles ? "Sí" : "No"], ["Archivo", r => r.descargable ? "En el servidor" : esc(r.file_path || "—") + " (en tu PC)"], ["Acciones", r => r.descargable ? `<button onclick="descargar(${r.id})">DESCARGAR</button>` : "—"]]);
   } catch (e) {}
 }
 async function cargarClipSelects() {
@@ -128,6 +129,8 @@ async function cargarClipSelects() {
   $("ed-clip").innerHTML = opts; $("pub-clip").innerHTML = opts;
 }
 function descargar(id) {
+  const c = clipsCache.find(x => x.id == id);
+  if (c && c.descargable === false) { alert("Este clip vive en tu PC (lo generó el trabajador), no en el servidor. Ábrelo desde su carpeta:\n" + (c.file_path || "")); return; }
   fetch(`/clips/${id}/download`, {headers: {"Authorization": "Bearer " + token}}).then(async r => {
     if (!r.ok) { const d = await r.json().catch(() => ({})); alert(d.detail || "No descargable desde el servidor"); return; }
     const b = await r.blob(); const a = document.createElement("a");
@@ -139,7 +142,7 @@ function descargarClip() { descargar($("ed-clip").value); }
 let logoPath = "";
 async function cargarEditor() {
   await cargarClipSelects();
-  $("ed-clips").innerHTML = tabla(clipsCache, [["Clip", r => "#" + r.id + " " + esc(r.title || "")], ["Formato", r => esc(r.format)], ["Duración", r => r.duration_s + "s"], ["Acciones", r => `<button onclick="descargar(${r.id})">DESCARGAR</button>`]]);
+  $("ed-clips").innerHTML = tabla(clipsCache, [["Clip", r => "#" + r.id + " " + esc(r.title || "")], ["Formato", r => esc(r.format)], ["Duración", r => r.duration_s + "s"], ["Archivo", r => r.descargable ? "En el servidor" : esc(r.file_path || "—") + " (en tu PC)"], ["Acciones", r => r.descargable ? `<button onclick="descargar(${r.id})">DESCARGAR</button>` : "—"]]);
 }
 async function subirLogo() {
   const f = $("ed-logo-file").files[0], cid = $("ed-clip").value;
@@ -203,10 +206,10 @@ async function cargarRedes() {
   } catch (e) {}
 }
 async function conectarRed(plat) {
-  try { const r = await fetch(`/auth/${plat}/conectar`, {headers: {"Authorization": "Bearer " + token}, redirect: "manual"});
-    if (r.status === 400) { const d = await r.json().catch(() => ({})); alert(d.detail || "Requiere configuración: faltan las credenciales OAuth de la app de " + plat + "."); return; }
-    if (r.type === "opaqueredirect" || (r.status >= 300 && r.status < 400)) { alert("La API redirige a la página oficial de " + plat + " para que autorices la cuenta (OAuth). Completa ese paso en la plataforma."); return; }
-    alert("Respuesta inesperada de la API (" + r.status + ").");
+  try { const r = await fetch(`/auth/${plat}/conectar?formato=json`, {headers: {"Authorization": "Bearer " + token}});
+    const d = await r.json().catch(() => ({}));
+    if (r.ok && d.url) { window.open(d.url, "_blank"); alert("Se abrió la página oficial de " + plat + " en una pestaña nueva: autoriza la cuenta allí y luego vuelve a esta pestaña y recarga «Mis redes sociales»."); return; }
+    alert(d.detail || "No se pudo iniciar la conexión con " + plat + ".");
   } catch (e) { alert("No se pudo iniciar la conexión: " + e.message); }
 }
 async function publicarReal(id) {

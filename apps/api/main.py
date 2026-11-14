@@ -216,7 +216,8 @@ def evaluar_piloto(s, evento):
         if proj: file_path = proj.file_path
     job = Job(type="generar_clip", payload=json.dumps({
         "event_id": evento.id, "project_id": evento.project_id, "session_id": evento.session_id,
-        "start_s": evento.start_s, "end_s": evento.end_s, "mode": evento.mode, "file_path": file_path}))
+        "start_s": evento.start_s, "end_s": evento.end_s, "mode": evento.mode, "file_path": file_path,
+        "type": evento.type, "score": evento.score}))
     s.add(job); s.commit()
     audit(s, "sistema", "piloto_automatico",
           f"Job generar_clip #{job.id} creado para evento {evento.id} (score {evento.score})")
@@ -458,6 +459,18 @@ def complete_job(jid: int, body: dict, w=Depends(worker_auth), s=Depends(db)):
                  duration_s=cl.get("duration_s"), score=int(cl.get("score", 0)), title=cl.get("title"),
                  titles_json=json.dumps(cl.get("titles", {})), subtitles=bool(cl.get("subtitles", False)))
         s.add(c); s.commit(); clips_persistidos.append(c)
+    # Al detener una grabación, la grabación completa vive solo como ruta local
+    # del trabajador: se registra como Project (una sola vez por ruta) para que
+    # aparezca en «Analizar con IA» y se le puedan generar clips.
+    if j.type == "detener_grabacion":
+        ruta = res.get("grabacion_completa")
+        if ruta and not s.query(Project).filter_by(file_path=ruta).first():
+            try: sid_grab = json.loads(j.payload or "{}").get("session_id")
+            except Exception: sid_grab = None
+            s.add(Project(name=f"Grabación sesión {sid_grab}" if sid_grab else "Grabación",
+                          file_path=ruta, duration_s=res.get("duration_s"),
+                          status="grabado"))
+            s.commit()
     # Etapa 5: clip generado por el piloto → publicaciones en borrador/requiere_conexion.
     if j.type == "generar_clip" and clips_persistidos:
         _piloto_publicaciones(s, clips_persistidos)
@@ -516,7 +529,14 @@ def create_clip(data: ClipIn, user=Depends(current_user), s=Depends(db)):
 @app.get("/clips")
 def list_clips(limit: int = 200, offset: int = 0, user=Depends(current_user), s=Depends(db)):
     q = s.query(Clip).order_by(Clip.id.desc()).offset(_clamp_offset(offset)).limit(_clamp_limit(limit))
-    return [ser(c, ["id", "event_id", "project_id", "session_id", "file_path", "thumb_path", "format", "duration_s", "score", "title", "subtitles", "status", "created_at"]) for c in q]
+    out = []
+    for c in q:
+        d = ser(c, ["id", "event_id", "project_id", "session_id", "file_path", "thumb_path", "format", "duration_s", "score", "title", "subtitles", "status", "created_at"])
+        # «descargable» solo si el archivo está EN ESTE servidor; la mayoría de
+        # los clips viven en el disco del trabajador (la ruta se muestra tal cual).
+        d["descargable"] = bool(c.file_path and Path(c.file_path).exists())
+        out.append(d)
+    return out
 @app.get("/clips/{cid}/download")
 def download_clip(cid: int, user=Depends(current_user), s=Depends(db)):
     c = s.get(Clip, cid)
@@ -666,14 +686,21 @@ def social(user=Depends(current_user), s=Depends(db)):
 
 # OAuth real (Etapa 4): state aleatorio guardado en Config y validado en el callback.
 @app.get("/auth/{plataforma}/conectar")
-def social_conectar(plataforma: str, user=Depends(current_user), s=Depends(db)):
+def social_conectar(plataforma: str, formato: str = "", user=Depends(current_user), s=Depends(db)):
     if plataforma not in social_lib.PLATAFORMAS: raise HTTPException(404, "Plataforma no válida")
     if not social_lib.oauth_configurado(plataforma):
-        raise HTTPException(400, "Esta plataforma requiere configuración: faltan las credenciales OAuth "
-                                 "de la app oficial en las variables de entorno del servidor.")
+        raise HTTPException(400, f"Falta crear la app OAuth oficial de {plataforma}: requiere configuración — "
+                                 "no hay credenciales cargadas en el servidor (variables de entorno). "
+                                 "Crea la app en la plataforma y carga su client id/secret en el servidor "
+                                 "para poder conectar; sin eso la conexión no puede iniciarse.")
     state = secrets.token_urlsafe(24)
     _cfg_set(s, f"oauth_state_{plataforma}", state); s.commit()
-    return RedirectResponse(social_lib.authorize_url(plataforma, state), status_code=307)
+    url = social_lib.authorize_url(plataforma, state)
+    # El panel pide la URL en JSON para abrirla en una pestaña nueva (antes el
+    # fetch con redirect:"manual" nunca llevaba al usuario a autorizar).
+    if formato == "json":
+        return {"url": url}
+    return RedirectResponse(url, status_code=307)
 @app.get("/auth/{plataforma}/callback")
 def social_callback(plataforma: str, code: str | None = None, state: str | None = None, s=Depends(db)):
     if plataforma not in social_lib.PLATAFORMAS: raise HTTPException(404, "Plataforma no válida")

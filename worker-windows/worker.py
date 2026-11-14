@@ -52,6 +52,38 @@ def procesar(job, cfg, api=None):
                             "end_s": e["end_s"], "score": e["score"], "breakdown": e["breakdown"]} for e in r["eventos"]],
                 "clips": [{k: c[k] for k in ("file_path", "format", "duration_s", "score", "title", "titles", "subtitles")} for c in r["clips"]],
                 "tiempo_pipeline_s": r["tiempo_total_pipeline_s"]}
+    if tipo == "generar_clip":
+        # Etapa 5 (lado trabajador): genera el clip de UN evento (piloto
+        # automático o futuro botón manual). El payload de la API trae
+        # event_id/project_id/session_id, start_s/end_s, mode y file_path
+        # (ruta del proyecto en ESTE trabajador). Sin file_path pero con
+        # sesión, la fuente es la grabación completa de esa sesión.
+        from clipper import exportar_clip, miniatura, contexto
+        from analyzer import duracion
+        from titles import generar as generar_titulos
+        if not p.get("file_path") and p.get("session_id"):
+            candidata = Path(cfg["carpeta_grabaciones"]) / f"sesion-{p['session_id']}" / "grabacion_completa.mp4"
+            if candidata.exists(): p = {**p, "file_path": str(candidata)}
+        if not p.get("file_path"):
+            raise ValueError("El evento no tiene archivo asociado (sin proyecto ni "
+                             "grabación de sesión): no se puede generar el clip.")
+        fuente = resolver_archivo(p, cfg, api)
+        total = duracion(fuente)
+        ini, fin = contexto(float(p["start_s"]), float(p["end_s"]), total,
+                            cfg.get("pre_s", 20), cfg.get("post_s", 15))
+        carpeta = (f"proyecto-{p['project_id']}" if p.get("project_id")
+                   else f"sesion-{p['session_id']}" if p.get("session_id") else "eventos")
+        salida = Path(cfg["carpeta_clips"]) / carpeta / f"clip-evento-{p.get('event_id', 'x')}.mp4"
+        salida.parent.mkdir(parents=True, exist_ok=True)
+        exportar_clip(fuente, ini, fin, salida, "9:16")
+        thumb = miniatura(salida, 1, salida.with_suffix(".jpg"))
+        score = int(p.get("score", 0))
+        tit = generar_titulos(p.get("type", "general"), p.get("mode", "general"), score)
+        return {"clips": [{"file_path": str(salida), "thumb_path": thumb, "format": "9:16",
+                            "duration_s": round(fin - ini, 2), "score": score,
+                            "title": tit["titulos"][0], "titles": tit, "subtitles": False,
+                            "event_id": p.get("event_id"), "project_id": p.get("project_id"),
+                            "session_id": p.get("session_id")}]}
     if tipo == "editar_clip":
         # Etapa 3 (lado trabajador): edición real con FFmpeg (ver editor.py).
         from editor import aplicar_edicion

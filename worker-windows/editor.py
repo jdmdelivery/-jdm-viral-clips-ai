@@ -120,7 +120,9 @@ def aplicar_edicion(fuente, salida, params=None):
     dur_clip = fin - ini
     notas = []
 
-    formato = params.get("formato") or params.get("format") or params.get("formato_destino")
+    # Por defecto TODO sale en vertical 9:16 (1080x1920) para Shorts/Reels/
+    # TikTok (regla de Jose); otro formato solo si se pide explícitamente.
+    formato = params.get("formato") or params.get("format") or params.get("formato_destino") or "9:16"
     if formato and formato not in FORMATOS:
         raise ValueError(f"Formato no soportado: {formato} (usa {sorted(FORMATOS)})")
     zoom = max(1.0, float(params.get("zoom", 1.0) or 1.0))
