@@ -1,0 +1,22 @@
+# JDM VIRAL CLIPS AI — Blueprint de Render (servicios INDEPENDIENTES, no toca otras apps)
+# Uso: Render -> New -> Blueprint -> conectar el repo -> aplica este archivo.
+# NOTA HONESTA: el disco de Render es EFÍMERO. Las grabaciones y clips viven en el
+# trabajador Windows (o Linux) local, nunca en Render. Render aloja panel + API + PostgreSQL.
+databases:
+  - name: jdm-viral-clips-ai-db
+    plan: free
+    databaseName: jdm_viral_clips
+services:
+  - type: web
+    name: jdm-viral-clips-ai
+    env: python
+    plan: free
+    buildCommand: "pip install -r apps/api/requirements.txt"
+    startCommand: "uvicorn main:app --app-dir apps/api --host 0.0.0.0 --port $PORT"
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: jdm-viral-clips-ai-db
+          property: connectionString
+      - key: PYTHON_VERSION
+        value: "3.12.3"

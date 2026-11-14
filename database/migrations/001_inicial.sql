@@ -1,0 +1,20 @@
+-- JDM VIRAL CLIPS AI — Migración 001 (PostgreSQL en Render / SQLite local con tipos compatibles)
+-- La API también crea las tablas con SQLAlchemy al arrancar; esta migración es la referencia formal.
+CREATE TABLE IF NOT EXISTS users (id SERIAL PRIMARY KEY, email VARCHAR UNIQUE NOT NULL, password_hash VARCHAR NOT NULL, role VARCHAR DEFAULT 'user', created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS session_tokens (id SERIAL PRIMARY KEY, user_id INTEGER REFERENCES users(id), token VARCHAR UNIQUE NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS workers (id SERIAL PRIMARY KEY, name VARCHAR NOT NULL, token_hash VARCHAR NOT NULL, status VARCHAR DEFAULT 'desconectado', last_seen TIMESTAMP, info TEXT DEFAULT '{}');
+CREATE TABLE IF NOT EXISTS live_sessions (id SERIAL PRIMARY KEY, title VARCHAR NOT NULL, mode VARCHAR DEFAULT 'general', status VARCHAR DEFAULT 'creada', autopilot BOOLEAN DEFAULT FALSE, min_score INTEGER DEFAULT 80, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, user_id INTEGER REFERENCES users(id));
+CREATE TABLE IF NOT EXISTS sources (id SERIAL PRIMARY KEY, session_id INTEGER REFERENCES live_sessions(id), url TEXT NOT NULL, kind VARCHAR DEFAULT 'hls', allowed BOOLEAN DEFAULT FALSE, explanation TEXT DEFAULT '');
+CREATE TABLE IF NOT EXISTS segments (id SERIAL PRIMARY KEY, session_id INTEGER REFERENCES live_sessions(id), path TEXT NOT NULL, index_no INTEGER DEFAULT 0, start_s FLOAT DEFAULT 0, duration_s FLOAT DEFAULT 10, protected BOOLEAN DEFAULT FALSE);
+CREATE TABLE IF NOT EXISTS projects (id SERIAL PRIMARY KEY, name VARCHAR NOT NULL, file_path TEXT, duration_s FLOAT, status VARCHAR DEFAULT 'importado', created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS events (id SERIAL PRIMARY KEY, session_id INTEGER REFERENCES live_sessions(id), project_id INTEGER REFERENCES projects(id), type VARCHAR DEFAULT 'general', mode VARCHAR DEFAULT 'general', start_s FLOAT DEFAULT 0, end_s FLOAT DEFAULT 0, score INTEGER DEFAULT 0, breakdown TEXT DEFAULT '{}', transcript TEXT, status VARCHAR DEFAULT 'detectado', created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS clips (id SERIAL PRIMARY KEY, event_id INTEGER REFERENCES events(id), project_id INTEGER REFERENCES projects(id), session_id INTEGER REFERENCES live_sessions(id), file_path TEXT, thumb_path TEXT, format VARCHAR DEFAULT '9:16', duration_s FLOAT, score INTEGER DEFAULT 0, title VARCHAR, titles_json TEXT DEFAULT '{}', subtitles BOOLEAN DEFAULT FALSE, status VARCHAR DEFAULT 'listo', created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS jobs (id SERIAL PRIMARY KEY, type VARCHAR NOT NULL, payload TEXT DEFAULT '{}', status VARCHAR DEFAULT 'pendiente', attempts INTEGER DEFAULT 0, error TEXT, result TEXT, worker_id INTEGER REFERENCES workers(id), created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS social_accounts (id SERIAL PRIMARY KEY, platform VARCHAR NOT NULL, account_name VARCHAR, status VARCHAR DEFAULT 'sin_conectar', token_encrypted TEXT);
+CREATE TABLE IF NOT EXISTS publications (id SERIAL PRIMARY KEY, clip_id INTEGER REFERENCES clips(id), platform VARCHAR NOT NULL, title VARCHAR, description TEXT, hashtags TEXT, status VARCHAR DEFAULT 'borrador', scheduled_at TIMESTAMP, external_id VARCHAR, error TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS calendar_entries (id SERIAL PRIMARY KEY, publication_id INTEGER REFERENCES publications(id), when_at TIMESTAMP NOT NULL, note VARCHAR DEFAULT '');
+CREATE TABLE IF NOT EXISTS audit_log (id SERIAL PRIMARY KEY, user_email VARCHAR, action VARCHAR NOT NULL, detail TEXT DEFAULT '', created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS config (id SERIAL PRIMARY KEY, key VARCHAR UNIQUE NOT NULL, value TEXT DEFAULT '');
+CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status);
+CREATE INDEX IF NOT EXISTS idx_events_score ON events(score);
+CREATE INDEX IF NOT EXISTS idx_publications_status ON publications(status);

@@ -1,0 +1,27 @@
+*{box-sizing:border-box}body{margin:0;background:#050508;color:#fff;font-family:system-ui,Segoe UI,Arial,sans-serif}
+.oculto{display:none!important}
+.login-box{max-width:420px;margin:8vh auto;background:#0d0d1a;border:1px solid #7b2fff;border-radius:16px;padding:28px;box-shadow:0 0 32px #7b2fff55}
+.login-box h1{color:#b26bff;font-size:24px}
+input,select,textarea{width:100%;padding:11px;margin:6px 0;background:#14142a;color:#fff;border:1px solid #2e2e55;border-radius:9px}
+button{background:linear-gradient(90deg,#7b2fff,#2563eb);color:#fff;border:0;padding:12px 16px;border-radius:10px;font-weight:700;cursor:pointer;margin:5px 4px 5px 0}
+button.sec{background:#1c1c33}button.rojo{background:linear-gradient(90deg,#dc2626,#7b2fff)}
+.msg{color:#7dd3fc;min-height:1.2em;white-space:pre-wrap}
+#app{display:flex;min-height:100vh}
+aside{width:230px;background:#0a0a18;border-right:1px solid #26264a;padding:16px;position:sticky;top:0;height:100vh;overflow:auto}
+aside h2{color:#b26bff;font-size:18px;line-height:1.25}
+aside nav button{display:block;width:100%;text-align:left;background:transparent;margin:2px 0;padding:9px}
+aside nav button:hover,aside nav button.act{background:#1d1d38}
+main{flex:1;padding:22px;max-width:1100px}
+.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px}
+.card{background:#101024;border:1px solid #2b2b52;border-radius:12px;padding:14px}
+.card b{font-size:26px;color:#7dd3fc}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:18px}@media(max-width:800px){.grid2{grid-template-columns:1fr}}
+video{width:100%;background:#000;border-radius:12px;aspect-ratio:16/9}
+.botones button{font-size:15px;padding:14px}
+table{width:100%;border-collapse:collapse}td,th{border-bottom:1px solid #26264a;padding:7px;text-align:left;font-size:14px}
+.nota{color:#a5a5c9;font-size:13px}
+label{display:block;margin:8px 0}
+.plats label{display:inline-block;margin-right:14px}
+.plats input{width:auto}
+.usr{color:#a5a5c9;font-size:13px}
+.score{color:#fbbf24;font-weight:700}

@@ -1,0 +1,16 @@
+# JDM VIRAL CLIPS AI — no subir a GitHub
+.venv/
+__pycache__/
+.pytest_cache/
+*.pyc
+data/
+tests/output/
+*.db
+*.sqlite3
+.env
+recordings/
+clips/
+segments/
+.DS_Store
+# Artefacto de ejecución: el modelo YuNet (OpenCV Zoo) se descarga en la instalación / en el primer uso; no se versiona
+worker-windows/*.onnx

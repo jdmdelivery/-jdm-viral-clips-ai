@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>JDM VIRAL CLIPS AI</title>
+<link rel="stylesheet" href="/static/style.css">
+<script src="https://cdn.jsdelivr.net/npm/hls.js@1/dist/hls.min.js"></script>
+</head>
+<body>
+<div id="login" class="login-box">
+  <h1>🚀 JDM VIRAL CLIPS AI</h1>
+  <p>Graba, detecta, crea y publica clips virales desde un solo sistema.</p>
+  <input id="li-email" type="email" placeholder="Correo">
+  <input id="li-pass" type="password" placeholder="Contraseña (mín. 8)">
+  <button onclick="entrar()">ENTRAR</button>
+  <button class="sec" onclick="registrarse()">CREAR CUENTA</button>
+  <p id="li-msg" class="msg"></p>
+</div>
+
+<div id="app" class="oculto">
+  <aside>
+    <h2>🚀 JDM VIRAL<br>CLIPS AI</h2>
+    <nav id="menu"></nav>
+    <p class="usr" id="usr"></p>
+    <button class="sec" onclick="salir()">Cerrar sesión</button>
+  </aside>
+  <main>
+    <section data-sec="inicio">
+      <h3>Inicio</h3>
+      <div class="cards" id="stats"></div>
+      <p class="nota">Datos reales de la base de datos. Sin trabajador conectado, la grabación y el análisis quedan en cola como «pendiente».</p>
+    </section>
+
+    <section data-sec="centro" class="oculto">
+      <h3>🔴 CENTRO DE TRANSMISIONES EN VIVO</h3>
+      <div class="grid2">
+        <div>
+          <input id="ss-titulo" placeholder="Título de la sesión (ej.: Alofoke LIVE)">
+          <select id="ss-modo"><option value="general">Modo general</option><option value="gta">Modo GTA</option><option value="alofoke">Modo La Casa de Alofoke</option><option value="podcast">Podcast / entrevista</option></select>
+          <button onclick="crearSesion()">CREAR SESIÓN</button>
+          <select id="ss-lista" onchange="cargarSesion()"></select>
+          <input id="src-url" placeholder="Pega el enlace HLS (.m3u8), RTMP o stream compatible">
+          <button onclick="validarFuente()">VERIFICAR FUENTE</button>
+          <p id="src-msg" class="msg"></p>
+        </div>
+        <div>
+          <video id="player" controls playsinline></video>
+          <div class="botones">
+            <button onclick="abrirLive()">▶ ABRIR LIVE</button>
+            <button class="rojo" onclick="iniciarGrab()">⏺ INICIAR GRABACIÓN</button>
+            <button onclick="activarRadar()">📡 ACTIVAR RADAR VIRAL</button>
+            <button onclick="ir('radar')">🔥 VER MOMENTOS DETECTADOS</button>
+            <button onclick="ir('clips')">🎬 GENERAR CLIPS</button>
+            <button onclick="ir('publicar')">📤 PUBLICAR CLIP</button>
+            <button class="rojo" onclick="detenerGrab()">⏹ DETENER GRABACIÓN</button>
+          </div>
+          <p id="live-msg" class="msg"></p>
+        </div>
+      </div>
+    </section>
+
+    <section data-sec="radar" class="oculto">
+      <h3>📡 LIVE VIRAL RADAR — Momentos detectados</h3>
+      <p class="nota">Puntuación 0–100 calculada de señales reales medidas (audio, escena, duración). Es una estimación: no garantiza vistas.</p>
+      <div id="eventos"></div>
+    </section>
+
+    <section data-sec="proyecto" class="oculto">
+      <h3>Nuevo proyecto</h3>
+      <p>Crea una sesión LIVE desde el Centro LIVE, o importa un video grabado (MP4/MOV/MKV) para analizarlo.</p>
+      <button onclick="ir('importar')">IR A IMPORTAR VIDEOS</button>
+      <button onclick="ir('centro')">IR AL CENTRO LIVE</button>
+    </section>
+
+    <section data-sec="importar" class="oculto">
+      <h3>Importar videos</h3>
+      <input type="file" id="imp-file" accept=".mp4,.mov,.mkv">
+      <button onclick="importar()">SUBIR VIDEO</button>
+      <p id="imp-msg" class="msg"></p>
+      <div id="proyectos"></div>
+    </section>
+
+    <section data-sec="analizar" class="oculto">
+      <h3>Analizar con IA</h3>
+      <p class="nota">El análisis lo ejecuta el trabajador (faster-whisper opcional, FFmpeg/OpenCV o degradación honesta). Encola un trabajo real por proyecto:</p>
+      <div id="proyectos2"></div>
+      <h4>Trabajos</h4><div id="trabajos"></div>
+    </section>
+
+    <section data-sec="clips" class="oculto">
+      <h3>Clips generados</h3>
+      <div id="clips"></div>
+    </section>
+
+    <section data-sec="editor" class="oculto">
+      <h3>✂️ Editor profesional</h3>
+      <p class="nota">La API valida y encola un trabajo real «editar_clip»; lo exporta el trabajador con FFmpeg (recorte, reencuadre, zoom, volumen, texto y logo). El clip editado aparece en «Clips generados» al completarse el trabajo. Subtítulos: DESACTIVADOS por defecto; solo se queman si marcas la casilla y hay transcripción.</p>
+      <select id="ed-clip"></select>
+      <div class="grid2">
+        <div>
+          <label>Recorte inicio (s) <input id="ed-ini" type="number" step="0.1" value="0"></label>
+          <label>Recorte fin (s, vacío = hasta el final) <input id="ed-fin" type="number" step="0.1"></label>
+          <label>Formato <select id="ed-formato"><option>9:16</option><option>16:9</option><option>1:1</option></select></label>
+          <label>Zoom (1 = sin zoom) <input id="ed-zoom" type="number" step="0.1" min="1" value="1"></label>
+          <label>Desplazar X (-1..1) <input id="ed-ox" type="number" step="0.1" value="0"></label>
+          <label>Desplazar Y (-1..1) <input id="ed-oy" type="number" step="0.1" value="0"></label>
+          <label>Volumen (1 = original, 0.5 = mitad) <input id="ed-vol" type="number" step="0.1" min="0.1" value="1"></label>
+        </div>
+        <div>
+          <label>Texto superpuesto <input id="ed-texto" placeholder="Texto opcional"></label>
+          <label><input id="ed-texto-activo" type="checkbox"> Mostrar el texto en el video</label>
+          <label>Logo (PNG/JPG) <input id="ed-logo-file" type="file" accept=".png,.jpg,.jpeg"></label>
+          <button class="sec" onclick="subirLogo()">SUBIR LOGO</button>
+          <p id="ed-logo-msg" class="msg"></p>
+          <label><input id="ed-subs" type="checkbox"> Quemar subtítulos (solo si hay transcripción)</label>
+          <textarea id="ed-transcript" placeholder="Transcripción opcional para subtítulos/títulos"></textarea>
+        </div>
+      </div>
+      <div class="botones">
+        <button onclick="encolarEdicion()">🎬 ENCOLAR EXPORTACIÓN</button>
+        <button onclick="pedirMiniatura()">🖼 MINIATURA</button>
+        <button onclick="descargarClip()">DESCARGAR MP4</button>
+        <button onclick="ir('publicar')">ENVIAR A PUBLICAR</button>
+      </div>
+      <p id="ed-msg" class="msg"></p>
+      <h4>Clips (el editado llega aquí al terminar el trabajo)</h4>
+      <div id="ed-clips"></div>
+    </section>
+
+    <section data-sec="redes" class="oculto">
+      <h3>Mis redes sociales</h3>
+      <div id="redes"></div>
+    </section>
+
+    <section data-sec="publicar" class="oculto">
+      <h3>📤 PUBLICAR CLIP</h3>
+      <select id="pub-clip" onchange="sugerirTextos()"></select>
+      <div class="plats">
+        <label><input type="checkbox" class="plat" value="tiktok"> TikTok</label>
+        <label><input type="checkbox" class="plat" value="facebook"> Facebook</label>
+        <label><input type="checkbox" class="plat" value="instagram"> Instagram</label>
+        <label><input type="checkbox" class="plat" value="youtube"> YouTube Shorts</label>
+      </div>
+      <input id="pub-titulo" placeholder="Título">
+      <textarea id="pub-desc" placeholder="Descripción"></textarea>
+      <input id="pub-tags" placeholder="#Hashtags">
+      <input id="pub-fecha" type="datetime-local">
+      <div class="botones">
+        <button onclick="publicarAhora()">GUARDAR BORRADOR PARA APROBACIÓN</button>
+        <button onclick="publicarAhora(true)">PROGRAMAR PUBLICACIÓN</button>
+      </div>
+      <p class="nota">Esto crea borradores reales en la API. Sin conexión OAuth verificada de cada plataforma, el estado queda «requiere conexión» — nunca «publicado» sin confirmación real de la plataforma. El botón PUBLICAR de la bandeja intenta la publicación real vía la API oficial y muestra el motivo si la cuenta no está conectada.</p>
+      <p id="pub-msg" class="msg"></p>
+      <h4>Bandeja de publicaciones</h4><div id="publicaciones"></div>
+    </section>
+
+    <section data-sec="calendario" class="oculto">
+      <h3>📅 Calendario de publicaciones</h3>
+      <select id="cal-pub"></select>
+      <input id="cal-fecha" type="datetime-local">
+      <input id="cal-nota" placeholder="Nota (opcional)">
+      <button onclick="programarCal()">PROGRAMAR</button>
+      <p id="cal-msg" class="msg"></p>
+      <div id="calendario"></div>
+    </section>
+    <section data-sec="historial" class="oculto"><h3>Historial</h3><div id="historial"></div></section>
+    <section data-sec="stats" class="oculto"><h3>Estadísticas</h3><div class="cards" id="stats2"></div></section>
+
+    <section data-sec="config" class="oculto">
+      <h3>Configuración</h3>
+      <label>Buffer circular (minutos, 2–10) <input id="cf-buffer" type="number" min="2" max="10"></label>
+      <label>Segundos antes del evento <input id="cf-pre" type="number"></label>
+      <label>Segundos después del evento <input id="cf-post" type="number"></label>
+      <label>Puntuación mínima de alerta <input id="cf-score" type="number"></label>
+      <label>Zona horaria <input id="cf-tz"></label>
+      <button onclick="guardarConfig()">GUARDAR</button>
+      <p id="cf-msg" class="msg"></p>
+      <h4>🚀 PILOTO AUTOMÁTICO VIRAL</h4>
+      <p class="nota">Si está activado, cada evento que supere la puntuación mínima genera su clip y deja borradores en la bandeja de aprobación. NUNCA publica solo: publicar siempre requiere tu aprobación y cuentas conectadas.</p>
+      <label><input id="ap-activo" type="checkbox"> PILOTO AUTOMÁTICO VIRAL ACTIVADO</label>
+      <label>Puntuación mínima <input id="ap-score" type="number" value="80"></label>
+      <label>Hora inicio (opcional, HH:MM) <input id="ap-hi" type="time"></label>
+      <label>Hora fin (opcional, HH:MM) <input id="ap-hf" type="time"></label>
+      <div class="plats">
+        <label><input type="checkbox" class="ap-plat" value="tiktok"> TikTok</label>
+        <label><input type="checkbox" class="ap-plat" value="facebook"> Facebook</label>
+        <label><input type="checkbox" class="ap-plat" value="instagram"> Instagram</label>
+        <label><input type="checkbox" class="ap-plat" value="youtube"> YouTube</label>
+      </div>
+      <button onclick="guardarPiloto()">GUARDAR PILOTO</button>
+      <p id="ap-msg" class="msg"></p>
+    </section>
+
+    <section data-sec="admin" class="oculto">
+      <h3>Administración — Trabajadores</h3>
+      <input id="wk-nombre" placeholder="Nombre del trabajador (ej.: PC de Jose)">
+      <button onclick="registrarWorker()">REGISTRAR TRABAJADOR Y OBTENER TOKEN</button>
+      <p id="wk-msg" class="msg"></p>
+      <div id="workers"></div>
+    </section>
+  </main>
+</div>
+<script src="/static/app.js"></script>
+</body>
+</html>

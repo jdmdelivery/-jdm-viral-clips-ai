@@ -1,0 +1,19 @@
+requests
+# Opcionales (la app degrada con honestidad si no están):
+# faster-whisper
+# opencv-python
+
+# --- Estado REAL en la VM de desarrollo (2026-11-14, Etapa 2) ---
+# INSTALADO Y VERIFICADO en .venv (Python 3.12):
+#   faster-whisper 1.2.1 (+ ctranslate2 4.9.0, onnxruntime, av 19.0.2, numpy)
+#     -> transcripción tiny/es FUNCIONA; ojo: la decodificación directa de
+#        faster-whisper rompe con PyAV 19 (TypeError metadata_errors), por lo
+#        que transcribe.py usa su fallback FFmpeg->array numpy, ya probado.
+#   opencv-python-headless 5.0.0.93
+#     -> INSTALA, pero opencv 5 ELIMINÓ CascadeClassifier y los XML de Haar;
+#        vision.detectar_rostros usa YuNet (FaceDetectorYN) con el modelo
+#        oficial opencv_zoo yunet.onnx (232.589 bytes, junto a vision.py en
+#        este directorio; en cv2 4.x usa Haar si está). Verificado: foto real
+#        = 1 rostro, clip sintético = 0 rostros.
+# En la PC Windows de Jose hay que instalarlos igual (pip install
+# faster-whisper opencv-python-headless) y copiar yunet.onnx si cv2 es 5.x.
