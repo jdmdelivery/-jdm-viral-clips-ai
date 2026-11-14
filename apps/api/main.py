@@ -129,6 +129,55 @@ class Config(Base):
     value = Column(Text, default="")
 Base.metadata.create_all(engine)
 
+# ---------- Auto-migración de columnas (BD existentes) ----------
+# create_all NO altera tablas ya creadas: una BD creada en la Etapa 1 no tiene
+# las columnas que las migraciones 002/003/004 añaden a tablas preexistentes, y
+# cualquier consulta ORM sobre esos modelos fallaría (p. ej. el heartbeat del
+# trabajador devolvía 500 en Render por faltar workers.version). Al arrancar se
+# añaden SOLO las columnas que falten: idempotente (segundo arranque = no-op) y
+# no-op en una BD nueva (create_all ya lo creó todo).
+# Los índices de la migración 002 NO se crean aquí a propósito: un índice
+# ausente solo afecta al rendimiento, nunca hace fallar un endpoint.
+_COLUMNAS_POST_001 = [
+    # (tabla, columna, tipo DDL por dialecto) — migración 002
+    ("calendar_entries", "status",
+     {"postgresql": "VARCHAR DEFAULT 'programada'", "sqlite": "VARCHAR DEFAULT 'programada'"}),
+    # migración 003
+    ("live_sessions", "radar_activo",
+     {"postgresql": "BOOLEAN DEFAULT FALSE", "sqlite": "BOOLEAN DEFAULT 0"}),
+    # migración 004
+    ("workers", "version",
+     {"postgresql": "VARCHAR DEFAULT ''", "sqlite": "VARCHAR DEFAULT ''"}),
+]
+def _auto_migrar_columnas():
+    from sqlalchemy import inspect as _sa_inspect, text as _sa_text
+    dialecto = engine.dialect.name
+    try:
+        inspector = _sa_inspect(engine)
+        tablas = set(inspector.get_table_names())
+    except Exception as e:  # si no se puede inspeccionar, la app arranca igual
+        print(f"[auto-migración] no se pudo inspeccionar la BD: {e}", file=sys.stderr)
+        return
+    for tabla, columna, ddl in _COLUMNAS_POST_001:
+        if tabla not in tablas:
+            continue  # sin tabla no hay nada que migrar (create_all la crea)
+        try:
+            existentes = {c["name"] for c in inspector.get_columns(tabla)}
+        except Exception as e:
+            print(f"[auto-migración] no se pudieron leer las columnas de {tabla}: {e}", file=sys.stderr)
+            continue
+        if columna in existentes:
+            continue
+        tipo = ddl.get(dialecto, ddl["sqlite"])
+        try:
+            # Cada ALTER en su propia transacción: un fallo no tumba el arranque.
+            with engine.begin() as conn:
+                conn.execute(_sa_text(f"ALTER TABLE {tabla} ADD COLUMN {columna} {tipo}"))
+            print(f"[auto-migración] columna añadida: {tabla}.{columna}")
+        except Exception as e:
+            print(f"[auto-migración] ERROR al añadir {tabla}.{columna}: {e}", file=sys.stderr)
+_auto_migrar_columnas()
+
 # ---------- Auth ----------
 def hash_pw(pw: str) -> str:
     salt = secrets.token_hex(16)
