@@ -607,10 +607,29 @@ def import_video(file: UploadFile = File(...), user=Depends(current_user), s=Dep
     p = Project(name=file.filename, file_path=str(dest), duration_s=dur); s.add(p); s.commit()
     audit(s, user.email, "importar_video", file.filename)
     return {"id": p.id, "name": p.name, "duration_s": dur, "file_path": str(dest)}
+def user_or_worker(authorization: str = Header(default=""), x_worker_token: str = Header(default=""), s=Depends(db)):
+    """Autoriza al usuario del panel (Bearer) O a un trabajador (X-Worker-Token).
+    Se intenta primero el token de trabajador; si no valida, se intenta el usuario.
+    Si ninguno valida, current_user/worker_auth lanzan 401."""
+    if x_worker_token:
+        try:
+            return {"tipo": "trabajador", "worker": worker_auth(x_worker_token=x_worker_token, s=s)}
+        except HTTPException:
+            pass
+    return {"tipo": "usuario", "user": current_user(authorization=authorization, s=s)}
 @app.get("/projects")
 def list_projects(limit: int = 200, offset: int = 0, user=Depends(current_user), s=Depends(db)):
     q = s.query(Project).offset(_clamp_offset(offset)).limit(_clamp_limit(limit))
     return [ser(p, ["id", "name", "duration_s", "status", "created_at"]) for p in q]
+@app.get("/projects/{pid}/file")
+def project_file(pid: int, auth=Depends(user_or_worker), s=Depends(db)):
+    """Descarga del archivo del proyecto: la usa el trabajador remoto, cuyo disco
+    no contiene la ruta del servidor (arquitectura híbrida Render + Windows)."""
+    p = s.get(Project, pid)
+    if not p: raise HTTPException(404, "Proyecto no encontrado")
+    if not Path(p.file_path).is_file():
+        raise HTTPException(404, "El archivo del proyecto no existe en el disco del servidor")
+    return FileResponse(p.file_path, filename=Path(p.file_path).name)
 @app.post("/projects/{pid}/analyze")
 def analyze(pid: int, user=Depends(current_user), s=Depends(db)):
     p = s.get(Project, pid)

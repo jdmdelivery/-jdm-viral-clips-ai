@@ -11,7 +11,27 @@ from analyzer import analizar_video
 
 grabaciones = {}  # session_id -> Recorder
 
-def procesar(job, cfg):
+def resolver_archivo(p, cfg, api=None):
+    """Resuelve la fuente del análisis en la arquitectura híbrida:
+    URL http(s) tal cual (la abre FFmpeg) · ruta local existente tal cual ·
+    ruta del servidor inexistente aquí -> descarga desde la API a la carpeta
+    local de descargas (reutiliza una copia previa con tamaño > 0)."""
+    ruta = p["file_path"]
+    if ruta.startswith(("http://", "https://")):
+        return ruta
+    if Path(ruta).exists():
+        return ruta
+    pid = p.get("project_id")
+    if pid and api is not None:
+        base = ruta.replace("\\", "/").rstrip("/").split("/")[-1] or f"proyecto-{pid}.mp4"
+        destino = Path(cfg["carpeta_clips"]) / "descargas" / f"proyecto-{pid}-{base}"
+        destino.parent.mkdir(parents=True, exist_ok=True)
+        if destino.exists() and destino.stat().st_size > 0:
+            return str(destino)
+        return str(api.descargar_proyecto(pid, destino))
+    return ruta
+
+def procesar(job, cfg, api=None):
     tipo, p = job["type"], job.get("payload", {})
     if tipo == "iniciar_grabacion":
         sid = p["session_id"]
@@ -25,7 +45,7 @@ def procesar(job, cfg):
         return {"estado": "detenida", "grabacion_completa": rec.stop()}
     if tipo == "analizar_video":
         salida = Path(cfg["carpeta_clips"]) / f"proyecto-{p.get('project_id', 'x')}"
-        r = analizar_video(p["file_path"], salida, modo=p.get("mode", "general"),
+        r = analizar_video(resolver_archivo(p, cfg, api), salida, modo=p.get("mode", "general"),
                            pre_s=cfg.get("pre_s", 20), post_s=cfg.get("post_s", 15),
                            max_clips=p.get("max_clips", 3))
         return {"events": [{"type": e["type"], "mode": e["mode"], "start_s": e["start_s"],
@@ -72,7 +92,7 @@ def main():
             job = api.reclamar()
             if job:
                 print(f"Trabajo {job['id']}: {job['type']}")
-                try: api.completar(job["id"], procesar(job, cfg))
+                try: api.completar(job["id"], procesar(job, cfg, api))
                 except Exception as e: api.fallar(job["id"], e)
             else:
                 time.sleep(5)

@@ -17,6 +17,20 @@ class ApiClient:
             return r.status_code == 200
         except requests.RequestException:
             return False
+    def descargar_proyecto(self, project_id, destino):
+        """Descarga el video de un proyecto desde la API (GET /projects/{id}/file)
+        en streaming: escribe a un .part y renombra atómicamente al completar."""
+        destino = Path(destino)
+        destino.parent.mkdir(parents=True, exist_ok=True)
+        parcial = Path(str(destino) + ".part")
+        with requests.get(self.base + f"/projects/{project_id}/file", headers=self.headers,
+                          timeout=600, stream=True) as r:
+            r.raise_for_status()
+            with open(parcial, "wb") as f:
+                for chunk in r.iter_content(chunk_size=1024 * 1024):
+                    if chunk: f.write(chunk)
+        parcial.replace(destino)
+        return destino
     def reclamar(self):
         r = self._req("POST", "/jobs/claim")
         r.raise_for_status()
