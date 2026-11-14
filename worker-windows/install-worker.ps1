@@ -34,10 +34,19 @@ $config = @{ api_url = $api; worker_token = $tok; carpeta_grabaciones = "$base\g
 [System.IO.File]::WriteAllText((Join-Path $dir "worker-config.json"), $config, (New-Object System.Text.UTF8Encoding($false)))
 Write-Host "Configuracion guardada. Probando conexion (heartbeat)..."
 & .\.venv\Scripts\python -c "import json,sys; sys.path.insert(0,'.'); from sync import ApiClient; c=json.load(open('worker-config.json', encoding='utf-8-sig')); print('Heartbeat OK' if ApiClient(c['api_url'], c['worker_token']).heartbeat() else 'SIN CONEXION: revisa URL/token o que la API este en linea')"
-$auto = Read-Host "Iniciar el trabajador automaticamente con Windows? (s/n)"
-if ($auto -eq "s") {
-  $lnk = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup\JDMViralWorker.bat"
-  "@echo off`r`ncd /d `"$dir`"`r`n.venv\Scripts\python worker.py --config worker-config.json" | Out-File -Encoding ascii $lnk
-  Write-Host "Inicio automatico creado: $lnk"
+# Motor invisible: tarea programada que arranca el trabajador con
+# pythonw (sin ventana de consola) al iniciar sesion, con reintentos.
+try {
+  $accionMotor = New-ScheduledTaskAction -Execute "$dir\.venv\Scripts\pythonw.exe" -Argument "worker.py --config worker-config.json" -WorkingDirectory $dir
+  $disparadorMotor = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
+  $ajustesMotor = New-ScheduledTaskSettingsSet -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -StartWhenAvailable
+  Register-ScheduledTask -TaskName "JDM Viral Clips AI - Motor" -Action $accionMotor -Trigger $disparadorMotor -Settings $ajustesMotor -Force | Out-Null
+  Write-Host "Tarea programada creada: JDM Viral Clips AI - Motor (arranca solo al iniciar sesion)." -ForegroundColor Green
+} catch {
+  Write-Host "AVISO: no se pudo crear la tarea programada del motor. Podras arrancarlo a mano con start-motor.bat." -ForegroundColor Yellow
 }
-Write-Host "Listo. Para arrancar ahora: .venv\Scripts\python worker.py --config worker-config.json" -ForegroundColor Green
+# Arranque manual del motor (sin consola): start-motor.bat en esta carpeta.
+$lineasBat = @("@echo off", 'cd /d "%~dp0"', 'start "" .venv\Scripts\pythonw.exe worker.py --config worker-config.json')
+[System.IO.File]::WriteAllText((Join-Path $dir "start-motor.bat"), ($lineasBat -join "`r`n") + "`r`n", [System.Text.Encoding]::ASCII)
+Write-Host "Arranque manual creado: start-motor.bat"
+Write-Host "Listo. El motor arranca solo al iniciar sesion (tarea programada JDM Viral Clips AI - Motor). Para arrancarlo a mano ahora: ejecuta start-motor.bat en esta carpeta." -ForegroundColor Green

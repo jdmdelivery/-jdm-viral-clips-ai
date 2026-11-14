@@ -2,8 +2,10 @@
 Grabación en proceso separado (Recorder) + análisis en el bucle de trabajos:
 procesar un clip NUNCA detiene una grabación en curso.
 Uso: python worker.py --config worker-config.json   (ver README.md)"""
-import argparse, json, sys, time
+import argparse, json, os, subprocess, sys, threading, time
 from pathlib import Path
+
+VERSION = "1.1.0"
 sys.path.insert(0, str(Path(__file__).parent))
 from sync import ApiClient
 from recorder import Recorder
@@ -42,6 +44,38 @@ def resolver_archivo(p, cfg, api=None):
             return str(destino)
         return str(api.descargar_proyecto(pid, destino))
     return ruta
+
+def _carpeta_datos(cfg):
+    return Path(cfg.get("carpeta_datos") or Path(cfg["carpeta_clips"]).parent)
+
+def _item_capcut(p, cfg, api):
+    """Item de CapCut {ruta_video, titulo, duracion_s} desde un payload:
+    resuelve el archivo (descarga desde la API si la ruta es del servidor)
+    y, si el payload no trae duración, la mide con ffprobe sin bloquear."""
+    ruta = resolver_archivo({"file_path": p["file_path"],
+                             "project_id": p.get("project_id")}, cfg, api)
+    duracion_s = p.get("duration_s")
+    if not duracion_s:
+        try:
+            from analyzer import duracion as _duracion
+            duracion_s = _duracion(ruta)
+        except Exception:
+            duracion_s = 0
+    return {"ruta_video": str(ruta), "titulo": p.get("title") or "Clip",
+            "duracion_s": float(duracion_s or 0)}
+
+def _enviar_a_capcut(nombre, items, cfg):
+    """Borrador directo si CapCut se detecta; si no, copia de respaldo."""
+    import capcut
+    carpeta_borradores = capcut.detectar_carpeta_borradores(cfg)
+    if carpeta_borradores is not None:
+        ruta = capcut.crear_borrador(nombre, items, carpeta_borradores)
+        return {"capcut": {"borrador": ruta.name, "carpeta": str(ruta),
+                           "clips": len(items), "via": "borrador"}}
+    ruta = capcut.copiar_respaldo(nombre, items, _carpeta_datos(cfg))
+    return {"capcut": {"respaldo": str(ruta), "clips": len(items),
+                       "via": "copia",
+                       "nota": "CapCut no detectado; clips copiados a " + str(ruta)}}
 
 def procesar(job, cfg, api=None):
     tipo, p = job["type"], job.get("payload", {})
@@ -156,18 +190,95 @@ def procesar(job, cfg, api=None):
             raise RuntimeError("FFmpeg no pudo generar la miniatura")
         return {"thumb_path": thumb,
                 "nota": "Miniatura generada por el trabajador; la ruta queda en el resultado del trabajo."}
+    if tipo == "enviar_capcut_clip":
+        # CapCut (lado trabajador): un clip -> borrador propio de CapCut en
+        # esta PC, o copia de respaldo con LEEME si CapCut no se detecta.
+        item = _item_capcut(p, cfg, api)
+        return _enviar_a_capcut(f"JDM Clip {p.get('clip_id', 'x')}", [item], cfg)
+    if tipo == "enviar_capcut_sesion":
+        # CapCut (lado trabajador): todos los clips de una sesión, en orden,
+        # en UN borrador (o en una sola carpeta de respaldo).
+        clips = p.get("clips") or []
+        if not clips:
+            raise ValueError("La sesión no trae clips para enviar a CapCut: "
+                             "no hay nada que poner en el borrador.")
+        items = [_item_capcut(c, cfg, api) for c in clips]
+        nombre = f"JDM {p.get('titulo_sesion') or 'Sesión ' + str(p.get('session_id', 'x'))}"
+        return _enviar_a_capcut(nombre, items, cfg)
     raise ValueError(f"Tipo de trabajo no soportado: {tipo}")
+
+def _configurar_log(cfg):
+    """Motor invisible: sin consola (pythonw, sys.stdout es None o sin
+    tty) los print van a <carpeta_datos>/motor.log, con rotación a
+    motor.log.old cuando supera 1 MB. Con consola no se toca nada.
+    Un fallo aquí nunca impide arrancar el trabajador."""
+    try:
+        sin_consola = sys.stdout is None
+        if not sin_consola:
+            try:
+                sin_consola = not sys.stdout.isatty()
+            except Exception:
+                sin_consola = True
+        if not sin_consola:
+            return
+        carpeta_datos = _carpeta_datos(cfg)
+        carpeta_datos.mkdir(parents=True, exist_ok=True)
+        ruta_log = carpeta_datos / "motor.log"
+        try:
+            if ruta_log.exists() and ruta_log.stat().st_size > 1024 * 1024:
+                os.replace(ruta_log, carpeta_datos / "motor.log.old")
+        except OSError:
+            pass
+        archivo = open(ruta_log, "a", encoding="utf-8", buffering=1)
+        sys.stdout = archivo
+        sys.stderr = archivo
+    except Exception:
+        pass
+
+def _hilo_actualizador(config_path):
+    """Actualizador en segundo plano: revisa a los ~20 s del arranque y
+    luego cada 6 horas. Si una actualización toca worker.py o
+    actualizador.py, relanza el motor y sale. Nunca tumba el bucle
+    principal: todo va envuelto en try/except."""
+    try:
+        time.sleep(20)
+        while True:
+            try:
+                import actualizador
+                resultado = actualizador.revisar(Path(__file__).resolve().parent)
+                if resultado.get("actualizados"):
+                    print(f"Actualizador: archivos actualizados: "
+                          f"{', '.join(resultado['actualizados'])}")
+                for error in resultado.get("errores", []):
+                    print(f"Actualizador: {error}")
+                if resultado.get("reiniciar"):
+                    print("Actualizador: el motor se reinicia para aplicar "
+                          "la actualización.")
+                    subprocess.Popen([sys.executable, str(Path(__file__).resolve()),
+                                      "--config", config_path])
+                    os._exit(0)
+            except Exception as e:
+                print(f"Actualizador: error sin detener el motor: {e}")
+            time.sleep(6 * 3600)
+    except Exception as e:
+        print(f"Actualizador: hilo detenido por un error: {e}")
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", default="worker-config.json")
     args = ap.parse_args()
     cfg = json.loads(Path(args.config).read_text(encoding="utf-8-sig"))
+    _configurar_log(cfg)
+    try:
+        threading.Thread(target=_hilo_actualizador, args=(args.config,),
+                         daemon=True).start()
+    except Exception as e:
+        print(f"Actualizador: no se pudo iniciar el hilo: {e}")
     api = ApiClient(cfg["api_url"], cfg["worker_token"], cfg.get("cola_offline", "cola-offline.json"))
     print(f"Trabajador conectado a {cfg['api_url']} — Ctrl+C para salir")
     while True:
         try:
-            api.heartbeat(); api.sincronizar_pendientes()
+            api.heartbeat(VERSION); api.sincronizar_pendientes()
             job = api.reclamar()
             if job:
                 print(f"Trabajo {job['id']}: {job['type']}")

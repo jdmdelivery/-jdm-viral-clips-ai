@@ -11,9 +11,12 @@ class ApiClient:
         self.cola_path = Path(cola_path or "cola-offline.json")
     def _req(self, metodo, ruta, **kw):
         return requests.request(metodo, self.base + ruta, headers=self.headers, timeout=30, **kw)
-    def heartbeat(self):
+    def heartbeat(self, version=None):
         try:
-            r = self._req("POST", "/workers/heartbeat")
+            if version is not None:
+                r = self._req("POST", "/workers/heartbeat", json={"version": version})
+            else:
+                r = self._req("POST", "/workers/heartbeat")
             return r.status_code == 200
         except requests.RequestException:
             return False
