@@ -3,7 +3,7 @@ const SECCIONES = [["inicio","🏠 Inicio"],["centro","🔴 Centro LIVE"],["rada
 let token = localStorage.getItem("jdm_token") || "";
 let motorConectado = null, ultimoEstadoMotor = null; // null = aún sin comprobar
 let ivMotor = null, ivEventos = null;                 // intervalos de auto-refresco por sección
-let ivGrab = null, ivContador = null, grabEnCurso = null, capcutIv = null; // seguimiento de grabación / CapCut
+let ivGrab = null, ivContador = null, grabEnCurso = null; // seguimiento de grabación
 const $ = id => document.getElementById(id);
 function setLiveMsg(txt, info = false) { const el = $("live-msg"); if (!el) return; el.textContent = txt; el.classList.toggle("info", !!info); }
 function setEvMsg(txt, info = false) { const el = $("ev-msg"); if (!el) return; el.textContent = txt; el.classList.toggle("info", !!info); }
@@ -206,42 +206,12 @@ async function cargarSesiones() {
     $("ss-lista").innerHTML = ss.map(s => `<option value="${s.id}">#${s.id} ${esc(s.title)} — ${esc(s.status)}${s.radar_activo ? " · 📡 radar" : ""}</option>`).join("") || "<option value=''>Sin sesiones</option>";
     if (previa && ss.some(s => String(s.id) === String(previa))) $("ss-lista").value = previa;
     const tablaSes = $("ss-tabla");
-    if (tablaSes) tablaSes.innerHTML = tabla(ss, [["Sesión", r => "#" + r.id + " " + esc(r.title)], ["Estado", r => esc(r.status)], ["Radar", r => r.radar_activo ? "📡 activo" : "—"], ["Acciones", r => `<button onclick="proyectoCapCutSesion(${r.id})">Proyecto CapCut</button>`]]);
+    if (tablaSes) tablaSes.innerHTML = tabla(ss, [["Sesión", r => "#" + r.id + " " + esc(r.title)], ["Estado", r => esc(r.status)], ["Radar", r => r.radar_activo ? "📡 activo" : "—"]]);
     const sel = ss.find(s => String(s.id) === String(sesionId())) || null;
     restaurarEstadoGrabacion(sel);
     await refrescarRadarUI(sel);
     cargarClipsSesion();
   } catch (e) {}
-}
-async function proyectoCapCutSesion(id) {
-  if (capcutIv) { clearInterval(capcutIv); capcutIv = null; }
-  let jobId = null;
-  try { const d = await api("POST", `/sessions/${id}/capcut`); jobId = d.job_id;
-    setLiveMsg("Proyecto CapCut encolado (trabajo #" + jobId + ", " + (d.clips ?? "?") + " clips). Esperando confirmación del trabajador… " + (d.nota || ""), true);
-  } catch (e) { setLiveMsg(e.message); return; }
-  const desde = Date.now(); let ocupado = false;
-  const paso = async () => {
-    if (ocupado) return; ocupado = true;
-    try { const js = await api("GET", "/jobs?limit=50"); const j = (js || []).find(x => x.id == jobId);
-      if (j && j.status === "completado") {
-        clearInterval(capcutIv); capcutIv = null;
-        const cap = (j.result && j.result.capcut) || null;
-        let donde = "", paquete = "";
-        if (typeof cap === "string") donde = cap;
-        else if (cap && typeof cap === "object") { donde = cap.borrador || cap.carpeta || cap.ruta || cap.path || ""; paquete = cap.paquete || cap.paquete_importacion || ""; }
-        if (!paquete && j.result && j.result.paquete) paquete = j.result.paquete;
-        setLiveMsg("Proyecto CapCut creado" + (donde ? ": " + donde : " (trabajo #" + jobId + " completado)") + (paquete ? ". Paquete de importación: " + paquete : ""));
-      } else if (j && (j.status === "fallido" || j.status === "failed")) {
-        clearInterval(capcutIv); capcutIv = null;
-        setLiveMsg("El Proyecto CapCut falló" + (j.error ? ": " + j.error : " (trabajo #" + jobId + ")."));
-      } else if (Date.now() - desde > 120000) {
-        clearInterval(capcutIv); capcutIv = null;
-        setLiveMsg("El trabajo #" + jobId + " de CapCut sigue en curso; revisa «Trabajos».", true);
-      }
-    } catch (e) { /* reintenta en el siguiente paso */ }
-    finally { ocupado = false; }
-  };
-  capcutIv = setInterval(paso, 3000); paso();
 }
 function sesionId() { const el = $("ss-lista"); return el ? el.value : ""; }
 // Al cambiar la selección: restaura grabación/radar, momentos y clips de esa sesión.
@@ -330,12 +300,10 @@ async function cargarClipsSesion() {
   if (!sid) { box.innerHTML = `<div class="fila-clips"><h4>Clips de esta sesión</h4><span class="nota">Selecciona una sesión para ver sus clips.</span></div>`; return; }
   try { const cs = await api("GET", `/clips?session_id=${sid}`);
     box.innerHTML = `<div class="fila-clips"><h4>Clips de esta sesión</h4>` +
-      `<button onclick="generarTodosClips()">GENERAR TODOS LOS CLIPS</button>` +
-      `<button onclick="proyectoCapCutSesion(${sid})">PROYECTO CAPCUT</button></div>` +
-      tabla(cs, [["Clip", r => "#" + r.id + " " + esc(r.title || "")], ["Duración", r => (r.duration_s ?? "—") + "s"], ["Score", r => `<span class='score'>${r.score}/100</span>`], ["Archivo/ruta", r => esc(r.file_path || "—")], ["Acciones", r => `<button onclick="enviarCapCutLive(${r.id})">Enviar a CapCut</button>`]]);
+      `<button onclick="generarTodosClips()">GENERAR TODOS LOS CLIPS</button></div>` +
+      tabla(cs, [["Clip", r => "#" + r.id + " " + esc(r.title || "")], ["Duración", r => (r.duration_s ?? "—") + "s"], ["Score", r => `<span class='score'>${r.score}/100</span>`], ["Archivo/ruta", r => esc(r.file_path || "—")], ["Acciones", r => accionesClip(r, "liveclip")]]);
   } catch (e) { box.innerHTML = `<div class="fila-clips"><h4>Clips de esta sesión</h4><span class="nota">${esc(e.message)}</span></div>`; }
 }
-async function enviarCapCutLive(id) { await enviarCapCut(id); const m = $("clips-msg"); if (m && m.textContent) setLiveMsg(m.textContent); }
 async function generarTodosClips() {
   const sid = sesionId(); if (!sid) { setLiveMsg("Crea y selecciona una sesión primero."); return; }
   try { const d = await api("POST", `/sessions/${sid}/generar-clips`);
@@ -408,15 +376,103 @@ async function analizar(pid) {
 }
 // Clips / editor / publicar
 let clipsCache = [];
+let subidasEnCurso = {}; // clipId -> seguimiento del poll de «subir_clip»
+// Acciones de un clip (VER / DESCARGAR) compartidas por «Clips generados»
+// (prefijo "clip") y los clips de sesión del Centro LIVE (prefijo
+// "liveclip"): los contenedores de estado/video llevan el prefijo para no
+// chocar entre secciones. VER y DESCARGAR usan la COPIA que el trabajador
+// sube al servidor; sin copia, piden la subida y esperan.
+function accionesClip(r, prefijo) {
+  const ver = r.tiene_copia_servidor
+    ? `<button onclick="verClip(${r.id}, '${prefijo}')">VER</button>`
+    : `<button onclick="pedirCopia(${r.id}, 'ver', '${prefijo}')">VER</button>`;
+  const bajar = r.tiene_copia_servidor
+    ? `<button onclick="descargarCopia(${r.id})">DESCARGAR</button>`
+    : `<button onclick="pedirCopia(${r.id}, 'descargar', '${prefijo}')">DESCARGAR</button>`;
+  return ver + " " + bajar +
+    `<span id="${prefijo}-estado-${r.id}" class="nota"></span><div id="${prefijo}-video-${r.id}"></div>`;
+}
+function verClip(id, prefijo) {
+  const box = document.getElementById(prefijo + "-video-" + id); if (!box) return;
+  // El <video> no puede mandar el header Authorization: se baja la copia con
+  // fetch autenticado y se reproduce desde un blob URL (mismo patrón que
+  // reproducirEvento). La API sí soporta Range para clientes directos.
+  fetch(`/clips/${id}/archivo`, {headers: {"Authorization": "Bearer " + token}}).then(async r => {
+    if (!r.ok) { const d = await r.json().catch(() => ({})); $("clips-msg").textContent = d.detail || "Este clip no tiene copia en el servidor todavía."; return; }
+    const b = await r.blob();
+    box.innerHTML = "";
+    const vid = document.createElement("video");
+    vid.controls = true; vid.autoplay = true; vid.src = URL.createObjectURL(b);
+    box.appendChild(vid);
+    const nota = document.createElement("p");
+    nota.className = "nota";
+    nota.textContent = "Estás viendo la copia guardada en el servidor: sirve para ver y descargar, pero el almacenamiento gratuito es temporal. El original siempre queda en tu PC.";
+    box.appendChild(nota);
+  }).catch(e => { $("clips-msg").textContent = "No se pudo cargar el clip: " + e.message; });
+}
+function nombreLocalClip(c) {
+  const p = String((c && c.file_path) || "").replace(/\\/g, "/");
+  return p.split("/").pop() || ("clip-" + (c ? c.id : "x") + ".mp4");
+}
+function descargarCopia(id) {
+  fetch(`/clips/${id}/archivo?descargar=1`, {headers: {"Authorization": "Bearer " + token}}).then(async r => {
+    if (!r.ok) { const d = await r.json().catch(() => ({})); $("clips-msg").textContent = d.detail || "Este clip no tiene copia en el servidor todavía."; return; }
+    const b = await r.blob(); const a = document.createElement("a");
+    a.href = URL.createObjectURL(b); a.download = nombreLocalClip(clipsCache.find(x => x.id == id)); a.click();
+  }).catch(e => { $("clips-msg").textContent = "No se pudo descargar el clip: " + e.message; });
+}
+async function pedirCopia(id, accion, prefijo) {
+  const est = document.getElementById(prefijo + "-estado-" + id);
+  try { const d = await api("POST", `/clips/${id}/solicitar-subida`);
+    if (d.tiene_copia_servidor || d.estado === "con_copia") {
+      if (accion === "ver") verClip(id, prefijo); else descargarCopia(id);
+      return;
+    }
+    if (est) est.textContent = d.hay_trabajador === false
+      ? "Tu PC está apagada o sin motor: enciéndelo para subir el clip."
+      : "Subiendo desde tu PC…";
+    seguirSubida(id, accion, d.job_id, prefijo);
+  } catch (e) { if (est) est.textContent = e.message; $("clips-msg").textContent = e.message; }
+}
+function seguirSubida(id, accion, jobId, prefijo) {
+  if (subidasEnCurso[id]) { subidasEnCurso[id].accion = accion; return; }
+  const reg = {accion, jobId: jobId || null, prefijo, desde: Date.now(), ocupado: false, iv: null};
+  subidasEnCurso[id] = reg;
+  const paso = async () => {
+    if (reg.ocupado) return; reg.ocupado = true;
+    try {
+      const cs = await api("GET", "/clips");
+      clipsCache = cs;
+      const c = cs.find(x => x.id == id);
+      const est = document.getElementById(reg.prefijo + "-estado-" + id);
+      if (c && c.tiene_copia_servidor) {
+        clearInterval(reg.iv); delete subidasEnCurso[id];
+        if (reg.prefijo === "liveclip") await cargarClipsSesion(); else await cargarClips();
+        if (reg.accion === "ver") verClip(id, reg.prefijo); else descargarCopia(id);
+        return;
+      }
+      if (reg.jobId) {
+        try { const js = await api("GET", "/jobs?limit=50"); const j = (js || []).find(x => x.id == reg.jobId);
+          if (j && (j.status === "fallido" || j.status === "failed")) {
+            clearInterval(reg.iv); delete subidasEnCurso[id];
+            if (est) est.textContent = "La subida falló" + (j.error ? ": " + j.error : ".");
+            return;
+          }
+        } catch (e) {}
+      }
+      if (Date.now() - reg.desde > 180000) {
+        clearInterval(reg.iv); delete subidasEnCurso[id];
+        if (est) est.textContent = "La subida sigue en curso en tu PC; vuelve a intentarlo en un momento.";
+      }
+    } catch (e) { /* red/API transitoria: el siguiente paso reintenta */ }
+    finally { reg.ocupado = false; }
+  };
+  reg.iv = setInterval(paso, 3000); paso();
+}
 async function cargarClips() {
   try { clipsCache = await api("GET", "/clips");
-    $("clips").innerHTML = tabla(clipsCache, [["Clip", r => "#" + r.id + " " + esc(r.title || "")], ["Formato", r => esc(r.format)], ["Duración", r => r.duration_s + "s"], ["Score", r => `<span class='score'>${r.score}/100</span>`], ["Subtítulos", r => r.subtitles ? "Sí" : "No"], ["Archivo", r => r.descargable ? "En el servidor" : esc(r.file_path || "—") + " (en tu PC)"], ["Acciones", r => (r.descargable ? `<button onclick="descargar(${r.id})">DESCARGAR</button> ` : "") + `<button onclick="enviarCapCut(${r.id})">Enviar a CapCut</button>`]]);
+    $("clips").innerHTML = tabla(clipsCache, [["Clip", r => "#" + r.id + " " + esc(r.title || "")], ["Formato", r => esc(r.format)], ["Duración", r => r.duration_s + "s"], ["Score", r => `<span class='score'>${r.score}/100</span>`], ["Subtítulos", r => r.subtitles ? "Sí" : "No"], ["Archivo", r => r.tiene_copia_servidor ? "Copia en el servidor" : (r.descargable ? "En el servidor" : esc(r.file_path || "—") + " (en tu PC)")], ["Acciones", r => accionesClip(r, "clip")]]);
   } catch (e) {}
-}
-async function enviarCapCut(id) {
-  try { const d = await api("POST", `/clips/${id}/capcut`);
-    $("clips-msg").textContent = "Trabajo #" + d.job_id + " encolado. " + (d.nota || "");
-  } catch (e) { $("clips-msg").textContent = e.message; }
 }
 async function cargarClipSelects() {
   await cargarClips();

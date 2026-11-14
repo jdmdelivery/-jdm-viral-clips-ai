@@ -23,6 +23,12 @@ DATA_DIR = BASE_DIR / "data"; DATA_DIR.mkdir(exist_ok=True)
 UPLOAD_DIR = DATA_DIR / "uploads"; UPLOAD_DIR.mkdir(exist_ok=True)
 LOGO_DIR = DATA_DIR / "logos"; LOGO_DIR.mkdir(exist_ok=True)
 LOGO_MAX_BYTES = 5 * 1024 * 1024  # límite de subida de logos (Etapa 3): 5 MB
+# Copias de clips en el servidor (ver/descargar desde el panel): el trabajador
+# sube una copia del clip que vive en su PC. Es SOLO una copia de consulta:
+# el almacenamiento del servidor (Render gratuito) es temporal y el original
+# siempre queda en la PC del trabajador.
+CLIPS_DIR = DATA_DIR / "clips_servidor"; CLIPS_DIR.mkdir(exist_ok=True)
+CLIP_MAX_BYTES = 200 * 1024 * 1024  # límite de la copia subida por el trabajador
 DATABASE_URL = os.environ.get("DATABASE_URL", f"sqlite:///{DATA_DIR}/jdm.db")
 if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
@@ -99,6 +105,10 @@ class Clip(Base):
     duration_s = Column(Float); score = Column(Integer, default=0)
     title = Column(String); titles_json = Column(Text, default="{}")
     subtitles = Column(Boolean, default=False); status = Column(String, default="listo")
+    # Copia del clip guardada EN ESTE servidor (la sube el trabajador) para
+    # ver/descargar desde el panel; NULL = sin copia. En BD existentes la
+    # añade la auto-migración; create_all la crea solo en BD nuevas.
+    archivo_servidor = Column(Text, nullable=True)
     created_at = Column(DateTime, default=now)
 class Job(Base):
     __tablename__ = "jobs"
@@ -161,6 +171,9 @@ _COLUMNAS_POST_001 = [
      {"postgresql": "TIMESTAMP", "sqlite": "TIMESTAMP"}),
     ("events", "descartado",
      {"postgresql": "BOOLEAN DEFAULT FALSE", "sqlite": "BOOLEAN DEFAULT 0"}),
+    # copia del clip en el servidor para ver/descargar desde el panel
+    ("clips", "archivo_servidor",
+     {"postgresql": "TEXT", "sqlite": "TEXT"}),
 ]
 def _auto_migrar_columnas():
     from sqlalchemy import inspect as _sa_inspect, text as _sa_text
@@ -190,6 +203,33 @@ def _auto_migrar_columnas():
         except Exception as e:
             print(f"[auto-migración] ERROR al añadir {tabla}.{columna}: {e}", file=sys.stderr)
 _auto_migrar_columnas()
+
+# ---------- Limpieza al arranque: trabajos de CapCut retirados ----------
+# Jose retiró la función CapCut (2026-11-14): los endpoints que encolaban
+# «enviar_capcut_clip»/«enviar_capcut_sesion» ya no existen, pero en la BD
+# pueden quedar trabajos PENDIENTES de esos tipos que el trabajador
+# reclamaría en bucle. Al arrancar se cancelan con estado terminal
+# «cancelado» (claim solo toma «pendiente»: nunca más se ejecutan).
+# Idempotente: un segundo arranque no encuentra ninguno y no cambia nada.
+def _cancelar_jobs_capcut():
+    s = SessionLocal()
+    try:
+        pendientes = (s.query(Job)
+                      .filter(Job.type.in_(["enviar_capcut_clip", "enviar_capcut_sesion"]),
+                              Job.status == "pendiente").all())
+        for j in pendientes:
+            j.status = "cancelado"
+            j.error = "Función CapCut retirada por Jose"
+        if pendientes:
+            s.commit()
+            print(f"[limpieza] {len(pendientes)} trabajo(s) de CapCut cancelados al arrancar")
+        return len(pendientes)
+    except Exception as e:  # la limpieza nunca debe tumbar el arranque
+        print(f"[limpieza] no se pudieron cancelar los trabajos de CapCut: {e}", file=sys.stderr)
+        return 0
+    finally:
+        s.close()
+_cancelar_jobs_capcut()
 
 # ---------- Auth ----------
 def hash_pw(pw: str) -> str:
@@ -293,6 +333,29 @@ def _job_generar_clip_activo(s, event_id):
 def _primer_clip_del_evento(s, event_id):
     """Primer Clip (por id) asociado a un evento, o None."""
     return s.query(Clip).filter_by(event_id=event_id).order_by(Clip.id).first()
+def _tiene_copia(c):
+    """True si el clip tiene copia guardada en ESTE servidor (archivo_servidor
+    marcado y el archivo existe en disco)."""
+    return bool(c and c.archivo_servidor and Path(c.archivo_servidor).is_file())
+def _hay_trabajador(s):
+    """True si algún trabajador latió hace ≤30 s (mismo criterio que el chip
+    «Motor conectado» del panel). last_seen puede venir sin zona (SQLite):
+    se trata como UTC."""
+    for w in s.query(Worker).all():
+        ls = w.last_seen
+        if not ls: continue
+        if ls.tzinfo is None: ls = ls.replace(tzinfo=timezone.utc)
+        if (now() - ls).total_seconds() <= 30: return True
+    return False
+def _job_subir_clip_activo(s, clip_id):
+    """Job «subir_clip» de ese clip en estado pendiente/procesando, o None
+    (anti-duplicados de POST /clips/{id}/solicitar-subida)."""
+    for j in (s.query(Job).filter_by(type="subir_clip")
+              .filter(Job.status.in_(["pendiente", "procesando"])).order_by(Job.id).all()):
+        try: p = json.loads(j.payload or "{}")
+        except Exception: continue
+        if p.get("clip_id") == clip_id: return j
+    return None
 def evaluar_piloto(s, evento):
     """Etapa 5 — Piloto Automático: si está activo, el score alcanza el mínimo y la hora
     cae en la ventana, encola UN Job «generar_clip» para el evento (anti-duplicados por
@@ -550,34 +613,6 @@ def stop_session(sid: int, user=Depends(current_user), s=Depends(db)):
     row.status = "deteniendo"; s.commit()
     job = Job(type="detener_grabacion", payload=json.dumps({"session_id": sid})); s.add(job); s.commit()
     return {"ok": True, "status": row.status, "job_id": job.id}
-@app.post("/sessions/{sid}/capcut")
-def session_capcut(sid: int, user=Depends(current_user), s=Depends(db)):
-    """Encola «enviar_capcut_sesion»: el trabajador crea en la PC un proyecto
-    borrador de CapCut con todos los clips de la sesión (patrón de encolado
-    de /clips/{cid}/edit y de /sessions/{sid}/radar). La API no crea nada."""
-    row = s.get(LiveSession, sid)
-    if not row: raise HTTPException(404, "Sesión no encontrada")
-    clips = s.query(Clip).filter_by(session_id=sid).order_by(Clip.id).all()
-    if not clips: raise HTTPException(400, "La sesión no tiene clips generados todavía")
-    def _clip_capcut(c):
-        # start_s/end_s salen del Event del clip (clip.event_id) cuando existe.
-        ev = s.get(Event, c.event_id) if c.event_id else None
-        return {"file_path": c.file_path,
-                "title": _primer_titulo_sugerido(c) or c.title or "",
-                "duration_s": c.duration_s,
-                "clip_id": c.id,
-                "start_s": ev.start_s if ev else None,
-                "end_s": ev.end_s if ev else None}
-    job = Job(type="enviar_capcut_sesion", payload=json.dumps({
-        "session_id": sid, "titulo_sesion": row.title,
-        "clips": [_clip_capcut(c) for c in clips]}))
-    s.add(job); s.commit()
-    audit(s, user.email, "enviar_capcut_sesion", f"sesión {sid} ({len(clips)} clips) -> job {job.id}")
-    return {"job_id": job.id, "status": job.status, "clips": len(clips),
-            "nota": "Proyecto CapCut encolado: lo crea el trabajador en la carpeta de borradores "
-                    "de CapCut de tu PC, con los clips de la sesión montados en orden. "
-                    "Sin trabajador conectado, el trabajo queda pendiente."}
-
 # Trabajos (cola persistente)
 @app.post("/jobs")
 def create_job(data: JobIn, user=Depends(current_user), s=Depends(db)):
@@ -663,7 +698,9 @@ def complete_job(jid: int, body: dict, w=Depends(worker_auth), s=Depends(db)):
     # Etapa 5: clip generado por el piloto → publicaciones en borrador/requiere_conexion.
     if j.type == "generar_clip" and clips_persistidos:
         _piloto_publicaciones(s, clips_persistidos)
-    return {"ok": True}
+    # clip_ids en el mismo orden que result.clips: el trabajador los usa para
+    # subir la copia de cada clip recién creado (ver/descargar en el panel).
+    return {"ok": True, "clip_ids": [c.id for c in clips_persistidos]}
 def _payload_project(job):
     try: return json.loads(job.payload or "{}").get("project_id")
     except Exception: return None
@@ -735,6 +772,7 @@ def live_events_ingest(sid: int, data: LiveIngestIn, w=Depends(worker_auth), s=D
         try: evaluar_piloto(s, e)  # el piloto también aplica a momentos en vivo
         except Exception: pass
     clips_guardados = 0
+    clip_ids = []
     for cl in data.clips:
         ev_id = None
         if cl.event_index is not None: ev_id = ids_por_indice.get(cl.event_index)
@@ -745,9 +783,11 @@ def live_events_ingest(sid: int, data: LiveIngestIn, w=Depends(worker_auth), s=D
         c = Clip(event_id=ev_id, session_id=sid, file_path=cl.file_path, format=cl.format,
                  duration_s=cl.duration_s, score=int(cl.score), title=cl.title,
                  titles_json=json.dumps(cl.titles or {}), subtitles=bool(cl.subtitles))
-        s.add(c); s.commit(); clips_guardados += 1
+        s.add(c); s.commit(); clips_guardados += 1; clip_ids.append(c.id)
+    # clip_ids alineados con data.clips: el radar los usa para subir la copia
+    # de cada clip al servidor (ver/descargar desde el panel).
     return {"ok": True, "eventos_guardados": guardados, "eventos_duplicados": duplicados,
-            "clips_guardados": clips_guardados}
+            "clips_guardados": clips_guardados, "clip_ids": clip_ids}
 
 # Eventos y clips
 @app.post("/events")
@@ -771,8 +811,8 @@ def list_events(session_id: int | None = None, incluir_descartados: bool = False
         d["tiene_clip"] = clip is not None
         d["clip_id"] = clip.id if clip else None
         d["clip_file_path"] = clip.file_path if clip else None
-        # Mismo criterio que GET /clips: el archivo existe en ESTE servidor.
-        d["clip_descargable"] = bool(clip and clip.file_path and Path(clip.file_path).exists())
+        # Mismo criterio que GET /clips: el archivo (o su copia) está en ESTE servidor.
+        d["clip_descargable"] = bool(clip and ((clip.file_path and Path(clip.file_path).exists()) or _tiene_copia(clip)))
         out.append(d)
     return out
 @app.post("/events/{eid}/descartar")
@@ -825,16 +865,105 @@ def list_clips(session_id: int | None = None, limit: int = 200, offset: int = 0,
     out = []
     for c in q:
         d = ser(c, ["id", "event_id", "project_id", "session_id", "file_path", "thumb_path", "format", "duration_s", "score", "title", "subtitles", "status", "created_at"])
-        # «descargable» solo si el archivo está EN ESTE servidor; la mayoría de
-        # los clips viven en el disco del trabajador (la ruta se muestra tal cual).
-        d["descargable"] = bool(c.file_path and Path(c.file_path).exists())
+        # «descargable» si el archivo está EN ESTE servidor: o porque su ruta
+        # vive aquí, o porque el trabajador subió una copia (archivo_servidor).
+        # La mayoría de los clips viven en el disco del trabajador (la ruta se
+        # muestra tal cual).
+        d["descargable"] = bool((c.file_path and Path(c.file_path).exists()) or _tiene_copia(c))
+        d["tiene_copia_servidor"] = _tiene_copia(c)
         out.append(d)
     return out
 @app.get("/clips/{cid}/download")
 def download_clip(cid: int, user=Depends(current_user), s=Depends(db)):
     c = s.get(Clip, cid)
-    if not c or not c.file_path or not Path(c.file_path).exists(): raise HTTPException(404, "Archivo del clip no disponible en este servidor (vive en el trabajador Windows)")
-    return FileResponse(c.file_path, media_type="video/mp4", filename=Path(c.file_path).name)
+    if not c: raise HTTPException(404, "Clip no encontrado")
+    if c.file_path and Path(c.file_path).exists():
+        return FileResponse(c.file_path, media_type="video/mp4", filename=Path(c.file_path).name)
+    if _tiene_copia(c):  # respaldo: la copia que subió el trabajador
+        nombre = Path(c.file_path).name if c.file_path else f"clip-{cid}.mp4"
+        return FileResponse(c.archivo_servidor, media_type="video/mp4", filename=nombre)
+    raise HTTPException(404, "Archivo del clip no disponible en este servidor (vive en el trabajador Windows)")
+
+# ---------- Copia del clip en el servidor (ver/descargar desde el panel) ----------
+# Los clips se generan en la PC del trabajador; para VERLOS y DESCARGARLOS
+# desde el panel, el trabajador sube una copia aquí. La copia es solo de
+# consulta: el almacenamiento gratuito del servidor es temporal y el
+# original siempre queda en la PC.
+@app.post("/clips/{cid}/archivo")
+async def subir_archivo_clip(cid: int, request: Request, w=Depends(worker_auth), s=Depends(db)):
+    """Subida de la copia por el TRABAJADOR (X-Worker-Token): cuerpo crudo del
+    MP4 en streaming (no se carga entero en memoria). Límite CLIP_MAX_BYTES
+    (200 MB): 413 si se pasa, sin dejar archivo parcial marcado."""
+    c = s.get(Clip, cid)
+    if not c: raise HTTPException(404, "Clip no encontrado")
+    declarado = request.headers.get("content-length")
+    if declarado:
+        try:
+            if int(declarado) > CLIP_MAX_BYTES:
+                raise HTTPException(413, f"El clip supera el límite de copia en el servidor ({CLIP_MAX_BYTES // (1024 * 1024)} MB)")
+        except ValueError:
+            pass
+    dest = CLIPS_DIR / f"clip_{cid}.mp4"
+    parcial = CLIPS_DIR / f"clip_{cid}.mp4.part"
+    size = 0
+    try:
+        with open(parcial, "wb") as out:
+            async for chunk in request.stream():
+                if not chunk: continue
+                size += len(chunk)
+                if size > CLIP_MAX_BYTES:
+                    raise HTTPException(413, f"El clip supera el límite de copia en el servidor ({CLIP_MAX_BYTES // (1024 * 1024)} MB)")
+                out.write(chunk)
+    except HTTPException:
+        parcial.unlink(missing_ok=True)
+        raise
+    if size == 0:
+        parcial.unlink(missing_ok=True)
+        raise HTTPException(400, "La subida llegó vacía: no se guardó ninguna copia")
+    parcial.replace(dest)  # renombrado atómico: nunca queda una copia a medias
+    c.archivo_servidor = str(dest); s.commit()
+    audit(s, f"trabajador:{w.name}", "subir_copia_clip", f"clip {cid}: {size} bytes")
+    return {"ok": True, "clip_id": cid, "bytes": size, "archivo_servidor": dest.name}
+@app.get("/clips/{cid}/archivo")
+def obtener_archivo_clip(cid: int, descargar: int = 0, user=Depends(current_user), s=Depends(db)):
+    """Sirve la copia del clip al USUARIO del panel. Sin «descargar», se
+    sirve en línea (FileResponse soporta Range: el reproductor puede buscar).
+    Con ?descargar=1, Content-Disposition attachment con el nombre original."""
+    c = s.get(Clip, cid)
+    if not c: raise HTTPException(404, "Clip no encontrado")
+    if not _tiene_copia(c):
+        raise HTTPException(404, "Este clip todavía no tiene copia en el servidor: se genera en tu PC. "
+                                 "Pide la subida con el botón VER o DESCARGAR y espera a que tu PC la suba.")
+    if descargar:
+        nombre = Path(c.file_path).name if c.file_path else f"clip-{cid}.mp4"
+        return FileResponse(c.archivo_servidor, media_type="video/mp4", filename=nombre)
+    return FileResponse(c.archivo_servidor, media_type="video/mp4")
+@app.post("/clips/{cid}/solicitar-subida")
+def solicitar_subida_clip(cid: int, user=Depends(current_user), s=Depends(db)):
+    """El panel pide la copia: si ya existe, lo dice; si no, encola UN job
+    «subir_clip» para el trabajador (sin duplicar uno activo del mismo clip)."""
+    c = s.get(Clip, cid)
+    if not c: raise HTTPException(404, "Clip no encontrado")
+    hay = _hay_trabajador(s)
+    if _tiene_copia(c):
+        return {"ok": True, "estado": "con_copia", "tiene_copia_servidor": True,
+                "hay_trabajador": hay, "job_id": None,
+                "nota": "Este clip ya tiene copia en el servidor: puedes verlo y descargarlo."}
+    if not c.file_path:
+        raise HTTPException(400, "El clip no tiene archivo asociado en la PC: no hay nada que subir")
+    activo = _job_subir_clip_activo(s, cid)
+    if activo:
+        return {"ok": True, "estado": "subiendo", "tiene_copia_servidor": False, "duplicado": True,
+                "hay_trabajador": hay, "job_id": activo.id,
+                "nota": "La subida ya está en curso en tu PC." if hay else
+                        "Tu PC está apagada o sin motor: enciéndelo para subir el clip."}
+    job = Job(type="subir_clip", payload=json.dumps({"clip_id": cid, "file_path": c.file_path}))
+    s.add(job); s.commit()
+    audit(s, user.email, "solicitar_subida_clip", f"clip {cid} -> job {job.id}")
+    return {"ok": True, "estado": "subiendo", "tiene_copia_servidor": False, "duplicado": False,
+            "hay_trabajador": hay, "job_id": job.id,
+            "nota": "Subida encolada: tu PC subirá la copia en cuanto procese el trabajo." if hay else
+                    "Tu PC está apagada o sin motor: enciéndelo para subir el clip."}
 
 # ---------- Editor (Etapa 3, lado API) ----------
 # La API NO edita video: valida y encola el trabajo; lo exporta el trabajador
@@ -890,40 +1019,6 @@ def clip_thumbnail(cid: int, data: ThumbIn, user=Depends(current_user), s=Depend
     return {"job_id": job.id, "status": job.status,
             "nota": "Miniatura encolada como job «miniatura»: la genera el trabajador desde el segundo "
                     "indicado; sin trabajador conectado queda pendiente."}
-
-# ---------- CapCut (lado API) ----------
-# La API NO crea el borrador: valida y encola el trabajo; lo crea el
-# trabajador en la PC, en la carpeta de borradores de CapCut.
-def _primer_titulo_sugerido(c):
-    """Primer título sugerido de titles_json ({"titulos": [...]}), o None.
-
-    titles_json llega como texto JSON (lo guarda así el complete del
-    trabajador); cualquier fallo de parseo o forma inesperada devuelve None
-    y el llamante cae al título propio del clip."""
-    try:
-        datos = json.loads(c.titles_json or "{}")
-    except Exception:
-        return None
-    if not isinstance(datos, dict): return None
-    titulos = datos.get("titulos")
-    if isinstance(titulos, list) and titulos and titulos[0]:
-        return str(titulos[0])
-    return None
-@app.post("/clips/{cid}/capcut")
-def clip_capcut(cid: int, user=Depends(current_user), s=Depends(db)):
-    c = s.get(Clip, cid)
-    if not c: raise HTTPException(404, "Clip no encontrado")
-    if not c.file_path: raise HTTPException(400, "El clip no tiene archivo asociado")
-    titulo = _primer_titulo_sugerido(c) or c.title or f"Clip {cid}"
-    job = Job(type="enviar_capcut_clip", payload=json.dumps({
-        "clip_id": cid, "project_id": c.project_id, "file_path": c.file_path,
-        "title": titulo, "duration_s": c.duration_s}))
-    s.add(job); s.commit()
-    audit(s, user.email, "enviar_capcut", f"clip {cid} -> job {job.id}")
-    return {"job_id": job.id, "status": job.status,
-            "nota": "Envío a CapCut encolado: lo crea el trabajador en la carpeta de borradores "
-                    "de CapCut de tu PC, con el clip y su título listos para editar. "
-                    "Sin trabajador conectado, el trabajo queda pendiente."}
 
 # Proyectos / importación / análisis
 @app.post("/projects/import")

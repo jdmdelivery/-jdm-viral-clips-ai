@@ -15,13 +15,9 @@ Contrato probado (fuente de verdad):
   con anti-duplicado {job_id, duplicado} y 409 si ya hay clip),
   POST /sessions/{id}/generar-clips ({jobs, encolados, omitidos, total_eventos}).
 - GET /jobs incluye «result» parseado (dict); GET /clips acepta ?session_id=.
-- POST /sessions/{id}/capcut encola enviar_capcut_sesion cuyo payload
-  trae por clip clip_id, start_s y end_s.
-- Trabajador VERSION "1.2.0": procesar un enviar_capcut_sesion sin
-  CapCut detectable devuelve capcut.respaldo y capcut.paquete (carpeta
-  con el MP4, manifiesto.json y LEEME.txt).
+- Trabajador VERSION "1.3.0".
 
-Patrón (como tests/test_api.py, test_fix_panel.py y test_capcut.py):
+Patrón (como tests/test_api.py y test_fix_panel.py):
 TestClient, registro de usuario + headers Bearer, registro de trabajador
 + header X-Worker-Token, claim/complete del trabajador, videos reales
 con FFmpeg. La URL HLS de prueba es la IP pública literal que ya usan
@@ -36,7 +32,6 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 import main as apimain
-import capcut
 import worker as worker_mod
 
 client = TestClient(apimain.app)
@@ -381,74 +376,11 @@ def test_flujo_descartar_evento():
 
 
 # ---------------------------------------------------------------------------
-# Paso 10: CapCut por API — payload con clip_id, start_s y end_s por clip
+# Paso 11: versión del trabajador
 # ---------------------------------------------------------------------------
-def test_flujo_capcut_sesion_api(tmp_path):
-    h, wh = _usuario(), None
-    wh = _worker(h)
-    sid = None
-    try:
-        sid, e1, _e2 = _sesion_con_eventos(h, wh, tmp_path)
-        _clip_evento_completado(h, wh, sid, e1, tmp_path)
-        # GET /clips acepta ?session_id= y trae el clip de la sesión.
-        clips_sesion = [c for c in
-                        client.get(f"/clips?session_id={sid}", headers=h).json()
-                        if c.get("session_id") == sid]
-        assert len(clips_sesion) == 1, clips_sesion
-        clip_id = clips_sesion[0]["id"]
-        r = client.post(f"/sessions/{sid}/capcut", headers=h)
-        assert r.status_code == 200, r.text
-        job_id = r.json()["job_id"]
-        tipo, payload = _job_db(job_id)
-        assert tipo == "enviar_capcut_sesion"
-        assert len(payload["clips"]) == 1, payload
-        clip_payload = payload["clips"][0]
-        assert clip_payload.get("clip_id") == clip_id, clip_payload
-        assert clip_payload.get("start_s") == e1["start_s"], clip_payload
-        assert clip_payload.get("end_s") == e1["end_s"], clip_payload
-    finally:
-        if sid is not None:
-            _limpiar_sesion(h, wh, sid)
-
-
-# ---------------------------------------------------------------------------
-# Paso 11: CapCut en el trabajador — paquete con manifiesto y respaldo
-# ---------------------------------------------------------------------------
-def test_version_trabajador_1_2_0():
-    assert worker_mod.VERSION == "1.2.0", (
-        f"VERSION del trabajador debe ser «1.2.0», no «{worker_mod.VERSION}»")
-    assert callable(capcut.crear_paquete)
-
-
-def test_flujo_capcut_trabajador_paquete(tmp_path, monkeypatch):
-    # Sin CapCut detectable: cfg sin capcut_carpeta y LOCALAPPDATA a una
-    # ruta inexistente -> detectar_carpeta_borradores devuelve None.
-    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "appdata-inexistente"))
-    mp4 = _video_prueba(tmp_path / "clip-origen.mp4")
-    cfg = {"carpeta_clips": str(tmp_path / "clips")}
-    job = {"type": "enviar_capcut_sesion",
-           "payload": {"session_id": 777, "titulo_sesion": "Prueba",
-                       "clips": [{"file_path": str(mp4), "title": "Clip 1",
-                                  "duration_s": 2, "start_s": 30,
-                                  "end_s": 45}]}}
-    r = worker_mod.procesar(job, cfg)
-    datos = r["capcut"]
-    # Vía copia de respaldo al no detectar CapCut.
-    assert datos.get("respaldo"), f"Sin CapCut debe haber respaldo: {datos}"
-    assert Path(datos["respaldo"]).is_dir()
-    # Y además el paquete de importación manual.
-    assert datos.get("paquete"), f"El resultado debe traer capcut.paquete: {datos}"
-    paquete = Path(datos["paquete"])
-    assert paquete.is_dir()
-    assert (paquete / mp4.name).is_file(), (
-        f"El MP4 debe estar copiado dentro del paquete: {list(paquete.iterdir())}")
-    manifiesto = json.loads((paquete / "manifiesto.json").read_text(encoding="utf-8"))
-    assert len(manifiesto["clips"]) == 1, manifiesto
-    clip_m = manifiesto["clips"][0]
-    assert clip_m["archivo"] == mp4.name, clip_m
-    assert clip_m["inicio_s"] == 30, clip_m
-    assert clip_m["fin_s"] == 45, clip_m
-    assert (paquete / "LEEME.txt").is_file()
+def test_version_trabajador_1_3_0():
+    assert worker_mod.VERSION == "1.3.0", (
+        f"VERSION del trabajador debe ser «1.3.0», no «{worker_mod.VERSION}»")
 
 
 # ---------------------------------------------------------------------------

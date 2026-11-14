@@ -5,7 +5,7 @@ Uso: python worker.py --config worker-config.json   (ver README.md)"""
 import argparse, json, os, subprocess, sys, threading, time
 from pathlib import Path
 
-VERSION = "1.2.0"
+VERSION = "1.3.0"
 sys.path.insert(0, str(Path(__file__).parent))
 from sync import ApiClient
 from recorder import Recorder
@@ -47,46 +47,6 @@ def resolver_archivo(p, cfg, api=None):
 
 def _carpeta_datos(cfg):
     return Path(cfg.get("carpeta_datos") or Path(cfg["carpeta_clips"]).parent)
-
-def _item_capcut(p, cfg, api):
-    """Item de CapCut {ruta_video, titulo, duracion_s} desde un payload:
-    resuelve el archivo (descarga desde la API si la ruta es del servidor)
-    y, si el payload no trae duración, la mide con ffprobe sin bloquear."""
-    ruta = resolver_archivo({"file_path": p["file_path"],
-                             "project_id": p.get("project_id")}, cfg, api)
-    duracion_s = p.get("duration_s")
-    if not duracion_s:
-        try:
-            from analyzer import duracion as _duracion
-            duracion_s = _duracion(ruta)
-        except Exception:
-            duracion_s = 0
-    return {"ruta_video": str(ruta), "titulo": p.get("title") or "Clip",
-            "duracion_s": float(duracion_s or 0),
-            "inicio_s": p.get("start_s"), "fin_s": p.get("end_s")}
-
-def _enviar_a_capcut(nombre, items, cfg):
-    """Borrador directo si CapCut se detecta; si no, copia de respaldo.
-    Después, en ambos casos, crea también el paquete de importación
-    manual (crear_paquete). Si el paquete falla, el borrador o la copia
-    siguen siendo el resultado principal y el error queda anotado."""
-    import capcut
-    carpeta_borradores = capcut.detectar_carpeta_borradores(cfg)
-    if carpeta_borradores is not None:
-        ruta = capcut.crear_borrador(nombre, items, carpeta_borradores)
-        resultado = {"capcut": {"borrador": ruta.name, "carpeta": str(ruta),
-                                "clips": len(items), "via": "borrador"}}
-    else:
-        ruta = capcut.copiar_respaldo(nombre, items, _carpeta_datos(cfg))
-        resultado = {"capcut": {"respaldo": str(ruta), "clips": len(items),
-                                "via": "copia",
-                                "nota": "CapCut no detectado; clips copiados a " + str(ruta)}}
-    try:
-        ruta_paquete = capcut.crear_paquete(nombre, items, _carpeta_datos(cfg))
-        resultado["capcut"]["paquete"] = str(ruta_paquete)
-    except Exception as e:
-        resultado["capcut"]["paquete_error"] = str(e)
-    return resultado
 
 def procesar(job, cfg, api=None):
     tipo, p = job["type"], job.get("payload", {})
@@ -201,22 +161,39 @@ def procesar(job, cfg, api=None):
             raise RuntimeError("FFmpeg no pudo generar la miniatura")
         return {"thumb_path": thumb,
                 "nota": "Miniatura generada por el trabajador; la ruta queda en el resultado del trabajo."}
-    if tipo == "enviar_capcut_clip":
-        # CapCut (lado trabajador): un clip -> borrador propio de CapCut en
-        # esta PC, o copia de respaldo con LEEME si CapCut no se detecta.
-        item = _item_capcut(p, cfg, api)
-        return _enviar_a_capcut(f"JDM Clip {p.get('clip_id', 'x')}", [item], cfg)
-    if tipo == "enviar_capcut_sesion":
-        # CapCut (lado trabajador): todos los clips de una sesión, en orden,
-        # en UN borrador (o en una sola carpeta de respaldo).
-        clips = p.get("clips") or []
-        if not clips:
-            raise ValueError("La sesión no trae clips para enviar a CapCut: "
-                             "no hay nada que poner en el borrador.")
-        items = [_item_capcut(c, cfg, api) for c in clips]
-        nombre = f"JDM {p.get('titulo_sesion') or 'Sesión ' + str(p.get('session_id', 'x'))}"
-        return _enviar_a_capcut(nombre, items, cfg)
+    if tipo == "subir_clip":
+        # Copia del clip al servidor para VER/DESCARGAR desde el panel: el
+        # original queda en esta PC; se sube una copia en streaming. Si el
+        # archivo no está en este disco, el trabajo falla con el motivo
+        # honesto (nada de fingir una subida).
+        ruta = p.get("file_path")
+        if not ruta or not Path(ruta).is_file():
+            raise FileNotFoundError(
+                f"El archivo del clip no existe en esta PC: {ruta or '(sin ruta en el trabajo)'}")
+        if api is None:
+            raise RuntimeError("Sin cliente de API: no se puede subir el clip")
+        r = api.subir_clip(int(p["clip_id"]), ruta)
+        return {"subido": True, "clip_id": p["clip_id"],
+                "bytes": (r or {}).get("bytes"), "archivo_local": ruta}
     raise ValueError(f"Tipo de trabajo no soportado: {tipo}")
+
+def _subir_copias_automaticas(resultado, detalle, api):
+    """Subida automática de copias: tras completar un trabajo que creó clips
+    (generar_clip, analizar_video, editar_clip), sube la copia de cada clip
+    recién creado para que se pueda VER/DESCARGAR desde el panel. Los ids
+    vienen en detalle["clip_ids"], en el mismo orden que resultado["clips"].
+    Es best-effort y nunca tumba el bucle: si una subida falla, el clip
+    queda creado igual y la copia se puede pedir desde el panel."""
+    if not detalle or api is None: return
+    ids = detalle.get("clip_ids") or []
+    for info, cid in zip((resultado or {}).get("clips") or [], ids):
+        ruta = (info or {}).get("file_path")
+        if not ruta or not Path(ruta).is_file(): continue
+        try:
+            api.subir_clip(cid, ruta)
+            print(f"Copia del clip {cid} subida al servidor (ya se puede ver en el panel).")
+        except Exception as e:
+            print(f"Copia del clip {cid} NO subida ({e}); se puede pedir desde el panel.")
 
 def _configurar_log(cfg):
     """Motor invisible: sin consola (pythonw, sys.stdout es None o sin
@@ -293,7 +270,12 @@ def main():
             job = api.reclamar()
             if job:
                 print(f"Trabajo {job['id']}: {job['type']}")
-                try: api.completar(job["id"], procesar(job, cfg, api))
+                try:
+                    resultado = procesar(job, cfg, api)
+                    detalle = api.completar_detalle(job["id"], resultado)
+                    # Sin detener nada: la copia de cada clip nuevo sube aquí,
+                    # en el mismo flujo del bucle de trabajos.
+                    _subir_copias_automaticas(resultado, detalle, api)
                 except Exception as e: api.fallar(job["id"], e)
             else:
                 time.sleep(5)

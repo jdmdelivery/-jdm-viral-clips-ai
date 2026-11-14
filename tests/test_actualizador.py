@@ -120,7 +120,7 @@ def test_manifest_coincide_con_disco():
         assert ruta.is_file(), nombre
         real = hashlib.sha256(ruta.read_bytes()).hexdigest()
         assert real == esperado, nombre
-    for obligatorio in ("worker.py", "capcut.py", "actualizador.py",
+    for obligatorio in ("worker.py", "actualizador.py",
                         "requirements.txt", "install-worker.ps1",
                         "install-worker.bat"):
         assert obligatorio in manifiesto["files"]

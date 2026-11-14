@@ -109,12 +109,26 @@ class RadarSesion:
     # ---------- reporte a la API ----------
     def _reportar(self, eventos, clips):
         try:
-            self.api.reportar_en_vivo(self.session_id, eventos, clips)
-            return True
+            respuesta = self.api.reportar_en_vivo(self.session_id, eventos, clips)
         except Exception as e:
             self.errores.append(f"reporte en vivo: {e}")
             self._pendientes.append((eventos, clips))
             return False
+        # Subida automática de la copia de cada clip reportado (para VERLO en
+        # el panel sin esperar): best-effort, en este mismo hilo del radar y
+        # sin tocar la grabación. La API devuelve los ids en «clip_ids», en el
+        # mismo orden que los clips enviados; si la subida falla, el clip
+        # queda creado igual y la copia se puede pedir desde el panel.
+        subir = getattr(self.api, "subir_clip", None)
+        ids = (respuesta or {}).get("clip_ids") or []
+        if subir is not None and clips:
+            for clip, cid in zip(clips, ids):
+                ruta = (clip or {}).get("file_path")
+                if not ruta: continue
+                try: subir(cid, ruta)
+                except Exception as e:
+                    self.errores.append(f"subida automática del clip {cid}: {e}")
+        return True
 
     def _reintentar_pendientes(self):
         pendientes, self._pendientes = self._pendientes, []

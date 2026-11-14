@@ -1,0 +1,24 @@
+-- JDM VIRAL CLIPS AI — Migración 006 (copia del clip en el servidor)
+-- Compatible con PostgreSQL (Render) y SQLite local.
+--
+-- Qué crea AUTOMÁTICAMENTE SQLAlchemy create_all() en una BD NUEVA (no hace
+-- falta aplicar esta migración): la columna clips.archivo_servidor junto al
+-- resto del esquema.
+--
+-- Qué necesita esta migración en una BD EXISTENTE:
+--   1) La columna clips.archivo_servidor (create_all NO altera tablas).
+-- En la práctica NINGUNA BD necesita aplicarla a mano: la columna está en la
+-- lista de auto-migración de apps/api/main.py (_COLUMNAS_POST_001) y la API
+-- la añade al arrancar si falta (idempotente). Este archivo queda como
+-- documentación del esquema, igual que 002/003/004/005.
+-- El ALTER fallará si la columna ya existe: aplicarlo una sola vez.
+--
+-- archivo_servidor: ruta de la COPIA del clip guardada en el servidor, que
+-- sube el trabajador (POST /clips/{id}/archivo) para que el dueño pueda VER
+-- y DESCARGAR el clip desde el panel (GET /clips/{id}/archivo). El clip
+-- original se genera y permanece en la PC del trabajador (clips.file_path);
+-- la copia es solo de consulta y el almacenamiento gratuito del servidor es
+-- temporal. NULL = el clip aún no tiene copia en el servidor.
+
+-- 1) Copia del clip en el servidor.
+ALTER TABLE clips ADD COLUMN archivo_servidor TEXT;

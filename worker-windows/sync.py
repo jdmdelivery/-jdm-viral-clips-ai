@@ -54,6 +54,40 @@ class ApiClient:
         except requests.RequestException:
             self.guardar_pendiente({"accion": "complete", "job_id": job_id, "result": result})
             return False
+    def completar_detalle(self, job_id, result):
+        """Igual que completar(), pero devuelve el JSON de la API (p. ej.
+        {"ok": True, "clip_ids": [...]}) cuando la compleción llega; si la
+        red falla, encola el resultado offline y devuelve None."""
+        try:
+            r = self._req("POST", f"/jobs/{job_id}/complete", json={"result": result})
+            r.raise_for_status()
+            return r.json()
+        except requests.RequestException:
+            self.guardar_pendiente({"accion": "complete", "job_id": job_id, "result": result})
+            return None
+    def subir_clip(self, clip_id, ruta, reintentos=3):
+        """Sube la COPIA de un clip al servidor (POST /clips/{id}/archivo,
+        token de trabajador) en streaming: el archivo se envía como cuerpo
+        crudo desde disco, sin cargarlo entero en memoria. Reintenta ante
+        fallos de red o 5xx; un 4xx (404/413…) no se reintenta. Devuelve el
+        JSON de la API; si todo falla, lanza la última excepción."""
+        import time as _time
+        ultimo = None
+        for intento in range(1, max(1, reintentos) + 1):
+            try:
+                with open(ruta, "rb") as f:
+                    r = requests.post(self.base + f"/clips/{clip_id}/archivo",
+                                      headers={**self.headers, "Content-Type": "video/mp4"},
+                                      data=f, timeout=600)
+                if r.status_code < 500:
+                    r.raise_for_status()  # 4xx: error definitivo, sin reintento
+                    return r.json()
+                ultimo = requests.HTTPError(f"HTTP {r.status_code} al subir el clip {clip_id}")
+            except requests.RequestException as e:
+                ultimo = e
+            if intento < max(1, reintentos):
+                _time.sleep(2 * intento)
+        raise ultimo
     def fallar(self, job_id, error):
         try:
             self._req("POST", f"/jobs/{job_id}/fail", json={"error": str(error)})
