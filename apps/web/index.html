@@ -65,6 +65,7 @@
           <p id="live-msg" class="msg"></p>
         </div>
       </div>
+      <div id="ss-tabla"></div>
     </section>
 
     <section data-sec="radar" class="oculto">
@@ -97,12 +98,14 @@
 
     <section data-sec="clips" class="oculto">
       <h3>Clips generados</h3>
+      <p id="clips-msg" class="msg"></p>
       <div id="clips"></div>
     </section>
 
     <section data-sec="editor" class="oculto">
       <h3>✂️ Editor profesional</h3>
       <p class="nota">La API valida y encola un trabajo real «editar_clip»; lo exporta el trabajador con FFmpeg (recorte, reencuadre, zoom, volumen, texto y logo). El clip editado aparece en «Clips generados» al completarse el trabajo. Subtítulos: DESACTIVADOS por defecto; solo se queman si marcas la casilla y hay transcripción.</p>
+      <p class="nota">CapCut: desde «Clips generados» cada clip puede enviarse a CapCut con «Enviar a CapCut» y cada sesión como «Proyecto CapCut»: el trabajador crea el borrador en CapCut (PC) con los cortes montados y los títulos editables; si CapCut no está instalado, copia los clips a una carpeta para importarlos a mano.</p>
       <select id="ed-clip"></select>
       <div class="grid2">
         <div>

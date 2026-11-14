@@ -6,7 +6,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
 
-from fastapi import Depends, FastAPI, File, Header, HTTPException, Request, UploadFile
+from fastapi import Body, Depends, FastAPI, File, Header, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -45,6 +45,9 @@ class Worker(Base):
     id = Column(Integer, primary_key=True); name = Column(String, nullable=False)
     token_hash = Column(String, nullable=False); status = Column(String, default="desconectado")
     last_seen = Column(DateTime); info = Column(Text, default="{}")
+    # Versión del motor que reporta el trabajador en el heartbeat. En BD
+    # existentes la añade la migración 004; create_all la crea en BD nuevas.
+    version = Column(String, default="")
 class LiveSession(Base):
     __tablename__ = "live_sessions"
     id = Column(Integer, primary_key=True); title = Column(String, nullable=False)
@@ -390,12 +393,19 @@ def worker_auth(x_worker_token: str = Header(default=""), s=Depends(db)):
     if not w: raise HTTPException(401, "Token de trabajador inválido")
     return w
 @app.post("/workers/heartbeat")
-def heartbeat(w=Depends(worker_auth), s=Depends(db)):
-    row = s.get(Worker, w.id); row.status = "conectado"; row.last_seen = now(); s.commit()
+def heartbeat(data: dict | None = Body(None), w=Depends(worker_auth), s=Depends(db)):
+    row = s.get(Worker, w.id); row.status = "conectado"; row.last_seen = now()
+    # Body opcional {"version": "1.1.0"}: los trabajadores viejos no envían
+    # body y siguen funcionando igual; solo se guarda una versión no vacía.
+    if data:
+        version = data.get("version")
+        if version:
+            row.version = str(version)
+    s.commit()
     return {"ok": True, "trabajos_pendientes": s.query(Job).filter_by(status="pendiente").count()}
 @app.get("/workers")
 def workers(user=Depends(current_user), s=Depends(db)):
-    return [ser(w, ["id", "name", "status", "last_seen"]) for w in s.query(Worker).all()]
+    return [ser(w, ["id", "name", "status", "last_seen", "version"]) for w in s.query(Worker).all()]
 
 # Sesiones LIVE y fuentes
 @app.post("/sessions")
@@ -453,6 +463,26 @@ def stop_session(sid: int, user=Depends(current_user), s=Depends(db)):
     row.status = "detenida"; s.commit()
     job = Job(type="detener_grabacion", payload=json.dumps({"session_id": sid})); s.add(job); s.commit()
     return {"ok": True, "status": row.status, "job_id": job.id}
+@app.post("/sessions/{sid}/capcut")
+def session_capcut(sid: int, user=Depends(current_user), s=Depends(db)):
+    """Encola «enviar_capcut_sesion»: el trabajador crea en la PC un proyecto
+    borrador de CapCut con todos los clips de la sesión (patrón de encolado
+    de /clips/{cid}/edit y de /sessions/{sid}/radar). La API no crea nada."""
+    row = s.get(LiveSession, sid)
+    if not row: raise HTTPException(404, "Sesión no encontrada")
+    clips = s.query(Clip).filter_by(session_id=sid).order_by(Clip.id).all()
+    if not clips: raise HTTPException(400, "La sesión no tiene clips generados todavía")
+    job = Job(type="enviar_capcut_sesion", payload=json.dumps({
+        "session_id": sid, "titulo_sesion": row.title,
+        "clips": [{"file_path": c.file_path,
+                   "title": _primer_titulo_sugerido(c) or c.title or "",
+                   "duration_s": c.duration_s} for c in clips]}))
+    s.add(job); s.commit()
+    audit(s, user.email, "enviar_capcut_sesion", f"sesión {sid} ({len(clips)} clips) -> job {job.id}")
+    return {"job_id": job.id, "status": job.status, "clips": len(clips),
+            "nota": "Proyecto CapCut encolado: lo crea el trabajador en la carpeta de borradores "
+                    "de CapCut de tu PC, con los clips de la sesión montados en orden. "
+                    "Sin trabajador conectado, el trabajo queda pendiente."}
 
 # Trabajos (cola persistente)
 @app.post("/jobs")
@@ -687,6 +717,40 @@ def clip_thumbnail(cid: int, data: ThumbIn, user=Depends(current_user), s=Depend
     return {"job_id": job.id, "status": job.status,
             "nota": "Miniatura encolada como job «miniatura»: la genera el trabajador desde el segundo "
                     "indicado; sin trabajador conectado queda pendiente."}
+
+# ---------- CapCut (lado API) ----------
+# La API NO crea el borrador: valida y encola el trabajo; lo crea el
+# trabajador en la PC, en la carpeta de borradores de CapCut.
+def _primer_titulo_sugerido(c):
+    """Primer título sugerido de titles_json ({"titulos": [...]}), o None.
+
+    titles_json llega como texto JSON (lo guarda así el complete del
+    trabajador); cualquier fallo de parseo o forma inesperada devuelve None
+    y el llamante cae al título propio del clip."""
+    try:
+        datos = json.loads(c.titles_json or "{}")
+    except Exception:
+        return None
+    if not isinstance(datos, dict): return None
+    titulos = datos.get("titulos")
+    if isinstance(titulos, list) and titulos and titulos[0]:
+        return str(titulos[0])
+    return None
+@app.post("/clips/{cid}/capcut")
+def clip_capcut(cid: int, user=Depends(current_user), s=Depends(db)):
+    c = s.get(Clip, cid)
+    if not c: raise HTTPException(404, "Clip no encontrado")
+    if not c.file_path: raise HTTPException(400, "El clip no tiene archivo asociado")
+    titulo = _primer_titulo_sugerido(c) or c.title or f"Clip {cid}"
+    job = Job(type="enviar_capcut_clip", payload=json.dumps({
+        "clip_id": cid, "project_id": c.project_id, "file_path": c.file_path,
+        "title": titulo, "duration_s": c.duration_s}))
+    s.add(job); s.commit()
+    audit(s, user.email, "enviar_capcut", f"clip {cid} -> job {job.id}")
+    return {"job_id": job.id, "status": job.status,
+            "nota": "Envío a CapCut encolado: lo crea el trabajador en la carpeta de borradores "
+                    "de CapCut de tu PC, con el clip y su título listos para editar. "
+                    "Sin trabajador conectado, el trabajo queda pendiente."}
 
 # Proyectos / importación / análisis
 @app.post("/projects/import")

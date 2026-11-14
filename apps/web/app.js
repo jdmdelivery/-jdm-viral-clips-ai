@@ -57,7 +57,14 @@ async function crearSesion() {
 async function cargarSesiones() {
   try { const ss = await api("GET", "/sessions");
     $("ss-lista").innerHTML = ss.map(s => `<option value="${s.id}">#${s.id} ${esc(s.title)} — ${esc(s.status)}${s.radar_activo ? " · 📡 radar" : ""}</option>`).join("") || "<option value=''>Sin sesiones</option>";
+    const tablaSes = $("ss-tabla");
+    if (tablaSes) tablaSes.innerHTML = tabla(ss, [["Sesión", r => "#" + r.id + " " + esc(r.title)], ["Estado", r => esc(r.status)], ["Radar", r => r.radar_activo ? "📡 activo" : "—"], ["Acciones", r => `<button onclick="proyectoCapCutSesion(${r.id})">Proyecto CapCut</button>`]]);
   } catch (e) {}
+}
+async function proyectoCapCutSesion(id) {
+  try { const d = await api("POST", `/sessions/${id}/capcut`);
+    $("live-msg").textContent = "Proyecto CapCut encolado (trabajo #" + d.job_id + ", " + d.clips + " clips). " + (d.nota || "");
+  } catch (e) { $("live-msg").textContent = e.message; }
 }
 function sesionId() { return $("ss-lista").value; }
 async function cargarSesion() {}
@@ -134,8 +141,13 @@ async function analizar(pid) {
 let clipsCache = [];
 async function cargarClips() {
   try { clipsCache = await api("GET", "/clips");
-    $("clips").innerHTML = tabla(clipsCache, [["Clip", r => "#" + r.id + " " + esc(r.title || "")], ["Formato", r => esc(r.format)], ["Duración", r => r.duration_s + "s"], ["Score", r => `<span class='score'>${r.score}/100</span>`], ["Subtítulos", r => r.subtitles ? "Sí" : "No"], ["Archivo", r => r.descargable ? "En el servidor" : esc(r.file_path || "—") + " (en tu PC)"], ["Acciones", r => r.descargable ? `<button onclick="descargar(${r.id})">DESCARGAR</button>` : "—"]]);
+    $("clips").innerHTML = tabla(clipsCache, [["Clip", r => "#" + r.id + " " + esc(r.title || "")], ["Formato", r => esc(r.format)], ["Duración", r => r.duration_s + "s"], ["Score", r => `<span class='score'>${r.score}/100</span>`], ["Subtítulos", r => r.subtitles ? "Sí" : "No"], ["Archivo", r => r.descargable ? "En el servidor" : esc(r.file_path || "—") + " (en tu PC)"], ["Acciones", r => (r.descargable ? `<button onclick="descargar(${r.id})">DESCARGAR</button> ` : "") + `<button onclick="enviarCapCut(${r.id})">Enviar a CapCut</button>`]]);
   } catch (e) {}
+}
+async function enviarCapCut(id) {
+  try { const d = await api("POST", `/clips/${id}/capcut`);
+    $("clips-msg").textContent = "Trabajo #" + d.job_id + " encolado. " + (d.nota || "");
+  } catch (e) { $("clips-msg").textContent = e.message; }
 }
 async function cargarClipSelects() {
   await cargarClips();
@@ -287,7 +299,7 @@ async function registrarWorker() {
 }
 async function cargarWorkers() {
   try { const ws = await api("GET", "/workers");
-    $("workers").innerHTML = tabla(ws, [["Nombre", r => esc(r.name)], ["Estado", r => esc(r.status)], ["Última vez", r => esc(r.last_seen || "—")]]);
+    $("workers").innerHTML = tabla(ws, [["Nombre", r => esc(r.name)], ["Estado", r => esc(r.status)], ["Motor", r => r.version ? "v" + esc(r.version) : "—"], ["Última vez", r => esc(r.last_seen || "—")]]);
   } catch (e) {}
 }
 if (token) { api("GET", "/auth/me").then(d => mostrarApp(d.email)).catch(() => {}); }
