@@ -10,14 +10,14 @@ class BufferCircular:
         self.protegidos = set()
         self.manifest_path = self.dir / "manifest.json"
         if not self.manifest_path.exists():
-            self.manifest_path.write_text("[]")
+            self.manifest_path.write_text("[]", encoding="utf-8")
     def _manifest(self):
-        return json.loads(self.manifest_path.read_text())
+        return json.loads(self.manifest_path.read_text(encoding="utf-8-sig"))
     def registrar(self, path, indice, inicio_s, duracion_s=10):
         m = self._manifest()
         m.append({"path": str(path), "indice": indice, "inicio_s": inicio_s,
                   "duracion_s": duracion_s, "creado": time.time()})
-        self.manifest_path.write_text(json.dumps(m, indent=1))
+        self.manifest_path.write_text(json.dumps(m, indent=1), encoding="utf-8")
         return m[-1]
     def proteger(self, indices):
         self.protegidos.update(indices)
@@ -36,5 +36,5 @@ class BufferCircular:
                 borrados += 1
             else:
                 quedan.append(seg)
-        self.manifest_path.write_text(json.dumps(quedan, indent=1))
+        self.manifest_path.write_text(json.dumps(quedan, indent=1), encoding="utf-8")
         return borrados

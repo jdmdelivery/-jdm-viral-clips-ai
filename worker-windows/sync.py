@@ -35,12 +35,12 @@ class ApiClient:
         except requests.RequestException:
             self.guardar_pendiente({"accion": "fail", "job_id": job_id, "error": str(error)})
     def guardar_pendiente(self, item):
-        cola = json.loads(self.cola_path.read_text()) if self.cola_path.exists() else []
+        cola = json.loads(self.cola_path.read_text(encoding="utf-8-sig")) if self.cola_path.exists() else []
         cola.append(item)
-        self.cola_path.write_text(json.dumps(cola, indent=1))
+        self.cola_path.write_text(json.dumps(cola, indent=1), encoding="utf-8")
     def sincronizar_pendientes(self):
         if not self.cola_path.exists(): return 0
-        cola = json.loads(self.cola_path.read_text())
+        cola = json.loads(self.cola_path.read_text(encoding="utf-8-sig"))
         enviados = 0
         for item in cola:
             try:
@@ -51,5 +51,5 @@ class ApiClient:
                 enviados += 1
             except requests.RequestException:
                 break
-        self.cola_path.write_text(json.dumps(cola[enviados:], indent=1))
+        self.cola_path.write_text(json.dumps(cola[enviados:], indent=1), encoding="utf-8")
         return enviados

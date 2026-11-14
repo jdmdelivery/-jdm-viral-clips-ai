@@ -63,7 +63,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", default="worker-config.json")
     args = ap.parse_args()
-    cfg = json.loads(Path(args.config).read_text())
+    cfg = json.loads(Path(args.config).read_text(encoding="utf-8-sig"))
     api = ApiClient(cfg["api_url"], cfg["worker_token"], cfg.get("cola_offline", "cola-offline.json"))
     print(f"Trabajador conectado a {cfg['api_url']} — Ctrl+C para salir")
     while True:

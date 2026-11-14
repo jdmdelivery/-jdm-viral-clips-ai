@@ -27,9 +27,9 @@ $tok = Read-Host "Token del trabajador (se obtiene en el panel: Administracion -
 $base = Join-Path $env:USERPROFILE "JDMViralClips"
 New-Item -ItemType Directory -Force -Path "$base\grabaciones", "$base\clips" | Out-Null
 $config = @{ api_url = $api; worker_token = $tok; carpeta_grabaciones = "$base\grabaciones"; carpeta_clips = "$base\clips"; buffer_min = 5; pre_s = 20; post_s = 15; cola_offline = "$base\cola-offline.json" } | ConvertTo-Json
-$config | Out-File -Encoding utf8 "worker-config.json"
+[System.IO.File]::WriteAllText((Join-Path $dir "worker-config.json"), $config, (New-Object System.Text.UTF8Encoding($false)))
 Write-Host "Configuracion guardada. Probando conexion (heartbeat)..."
-& .\.venv\Scripts\python -c "import json,sys; sys.path.insert(0,'.'); from sync import ApiClient; c=json.load(open('worker-config.json')); print('Heartbeat OK' if ApiClient(c['api_url'], c['worker_token']).heartbeat() else 'SIN CONEXION: revisa URL/token o que la API este en linea')"
+& .\.venv\Scripts\python -c "import json,sys; sys.path.insert(0,'.'); from sync import ApiClient; c=json.load(open('worker-config.json', encoding='utf-8-sig')); print('Heartbeat OK' if ApiClient(c['api_url'], c['worker_token']).heartbeat() else 'SIN CONEXION: revisa URL/token o que la API este en linea')"
 $auto = Read-Host "Iniciar el trabajador automaticamente con Windows? (s/n)"
 if ($auto -eq "s") {
   $lnk = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup\JDMViralWorker.bat"
