@@ -25,6 +25,7 @@ ROOT = Path(__file__).resolve().parents[1]
 WEB = ROOT / "apps" / "web"
 INDEX = (WEB / "index.html").read_text(encoding="utf-8")
 APPJS = (WEB / "app.js").read_text(encoding="utf-8")
+STYLE = (WEB / "style.css").read_text(encoding="utf-8")
 MAINPY = (ROOT / "apps" / "api" / "main.py").read_text(encoding="utf-8")
 
 PALABRAS_CLAVE = {"if", "for", "while", "switch", "catch", "return",
@@ -192,3 +193,88 @@ def test_c_contrato_panel_texto_presente_en_app_js(texto):
     assert texto in APPJS, (
         f"Contrato del panel: «{texto}» no aparece en apps/web/app.js "
         "(pendiente del lote Panel)")
+
+
+# ---------------------------------------------------------------------------
+# (d) Tarjetas de estadísticas (Inicio) clicables: data-nav -> ir(sección)
+# ---------------------------------------------------------------------------
+def _secciones_html():
+    """Secciones reales del panel: valores data-sec de index.html."""
+    return set(re.findall(r'data-sec="([^"]+)"', INDEX))
+
+
+def _nav_stats():
+    """Mapa etiqueta -> sección de NAV_STATS en app.js ({} si no existe)."""
+    m = re.search(r'NAV_STATS\s*=\s*\{(.*?)\};', APPJS, re.S)
+    if not m:
+        return {}
+    return dict(re.findall(r'"([^"]+)"\s*:\s*"([^"]+)"', m.group(1)))
+
+
+def _etiquetas_stats():
+    """Etiquetas que cargarStats() renderiza como tarjetas: las claves del
+    literal `const datos = {...}` (entre comillas o identificadores) más las
+    asignaciones posteriores datos["..."] = ..."""
+    etiquetas = set()
+    m = re.search(r'const datos = \{([^}]*)\}', APPJS)
+    assert m, "No se encontró el literal `const datos = {...}` de cargarStats()"
+    for doble, ident in re.findall(
+            r'(?:"([^"]+)"|([A-Za-zÁÉÍÓÚÑ][\wÁÉÍÓÚÑ]*))\s*:', m.group(1)):
+        etiquetas.add(doble or ident)
+    etiquetas |= set(re.findall(r'datos\["([^"]+)"\]\s*=', APPJS))
+    return etiquetas
+
+
+def test_d_nav_stats_existe_y_destinos_son_secciones_reales():
+    nav = _nav_stats()
+    assert nav, "NAV_STATS no existe o quedó vacío en app.js: sin mapa no hay tarjetas clicables."
+    secciones = _secciones_html()
+    malos = {k: v for k, v in nav.items() if v not in secciones}
+    assert not malos, (
+        "Tarjetas con data-nav hacia una sección que NO existe en "
+        f"index.html (clic muerto): {malos}. Secciones reales: {sorted(secciones)}")
+
+
+def test_d_toda_tarjeta_de_inicio_tiene_destino_real():
+    nav = _nav_stats()
+    sin_destino = sorted(_etiquetas_stats() - set(nav))
+    assert not sin_destino, (
+        "Tarjetas de Inicio que se renderizan sin data-nav (quedan sin clic): "
+        f"{sin_destino}. Si una no debe ser clicable, hay que documentarlo; "
+        "hoy todas tienen sección destino real.")
+
+
+def test_d_render_usa_data_nav_y_no_onclick():
+    assert 'data-nav="${NAV_STATS[k]}"' in APPJS, (
+        "cargarStats() no renderiza las tarjetas con data-nav desde NAV_STATS.")
+    assert 'class="card nav"' in APPJS and 'role="button"' in APPJS \
+        and 'tabindex="0"' in APPJS, (
+            "Las tarjetas clicables deben llevar clase «nav», role=\"button\" "
+            "y tabindex=\"0\" (accesibles por teclado).")
+
+
+def test_d_handler_delegado_unico_click_y_teclado():
+    assert APPJS.count('closest("[data-nav]")') == 1, (
+        "Debe haber UN solo handler delegado que resuelva [data-nav] "
+        "(sin handlers duplicados por tarjeta).")
+    assert 'addEventListener("click"' in APPJS, "Falta el listener delegado de clic para data-nav."
+    assert 'addEventListener("keydown"' in APPJS, (
+        "Falta el listener delegado de teclado (Enter/Espacio) para data-nav.")
+    assert "ir(t.dataset.nav)" in APPJS, (
+        "El handler delegado debe navegar con la función existente ir().")
+
+
+def test_d_ningun_onclick_vacio_en_panel():
+    patron = re.compile(r"""on(?:click|change)\s*=\s*(""|'')""")
+    for nombre, fuente in (("index.html", INDEX), ("app.js", APPJS)):
+        encontrados = patron.findall(fuente)
+        assert not encontrados, (
+            f"{nombre} contiene handlers onclick/onchange vacíos: {encontrados}")
+
+
+def test_d_css_tarjeta_navegable_con_hover_y_foco():
+    assert ".card.nav" in STYLE and "cursor:pointer" in STYLE, (
+        "Falta el estilo .card.nav con cursor:pointer en style.css.")
+    assert ".card.nav:hover" in STYLE, "Falta el realce al hover de .card.nav."
+    assert ".card.nav:focus-visible" in STYLE, (
+        "Falta el realce de foco visible (:focus-visible) de .card.nav.")

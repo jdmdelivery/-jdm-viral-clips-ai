@@ -52,19 +52,38 @@ async function registrarse() {
     $("li-msg").textContent = "Cuenta creada. Ahora pulsa ENTRAR."; }
   catch (e) { $("li-msg").textContent = e.message; }
 }
+// Tarjetas clicables (data-nav): UN solo handler delegado para todo el panel.
+// Clic o Enter/Espacio sobre una tarjeta navega con ir() a su sección.
+document.addEventListener("click", e => {
+  const t = e.target.closest ? e.target.closest("[data-nav]") : null;
+  if (t) ir(t.dataset.nav);
+});
+document.addEventListener("keydown", e => {
+  if ((e.key === "Enter" || e.key === " ") && e.target.dataset && e.target.dataset.nav) {
+    e.preventDefault(); ir(e.target.dataset.nav);
+  }
+});
 function salir() { localStorage.removeItem("jdm_token"); location.reload(); }
 function mostrarApp(email) {
   $("login").classList.add("oculto"); $("app").classList.remove("oculto"); $("usr").textContent = email || "";
   $("menu").innerHTML = SECCIONES.map(([k, v]) => `<button data-sec="${k}" onclick="ir('${k}')">${v}</button>`).join("");
   ir("inicio");
 }
+// Destino de navegación de cada tarjeta de estadísticas (Inicio y Estadísticas).
+// Solo secciones reales del panel (data-sec de index.html). Una etiqueta sin
+// destino aquí se renderiza como tarjeta normal, SIN clic: nada de clics muertos.
+// Nota: la tabla de trabajos vive en «analizar» (#trabajos); «admin» es la lista
+// de trabajadores, no de trabajos — por eso «Trabajos pendientes» va a «analizar».
+const NAV_STATS = {"Sesiones": "centro", "Grabando ahora": "centro", "Eventos": "radar", "Clips": "clips", "Proyectos": "analizar", "Trabajos pendientes": "analizar", "Publicaciones": "publicar", "Publicaciones por estado": "publicar", "Score promedio": "radar", "Mejor score": "radar", "Eventos ≥ umbral": "radar", "Eventos por modo": "radar"};
 async function cargarStats() {
   try { const s = await api("GET", "/stats");
     const datos = {Sesiones: s.sesiones, "Grabando ahora": s.grabando, Eventos: s.eventos, Clips: s.clips, Proyectos: s.proyectos, "Trabajos pendientes": s.trabajos_pendientes, Publicaciones: s.publicaciones, "Score promedio": Math.round(s.score_promedio)};
     if (s.mejor_score !== undefined) { datos["Mejor score"] = s.mejor_score; datos["Eventos ≥ umbral"] = s.eventos_sobre_umbral; }
     if (s.publicaciones_por_estado) datos["Publicaciones por estado"] = Object.entries(s.publicaciones_por_estado).map(([k, v]) => `${k}: ${v}`).join(", ") || "—";
     if (s.eventos_por_modo) datos["Eventos por modo"] = Object.entries(s.eventos_por_modo).map(([k, v]) => `${k}: ${v}`).join(", ") || "—";
-    const html = Object.entries(datos).map(([k, v]) => `<div class="card">${k}<br><b>${v}</b></div>`).join("");
+    const html = Object.entries(datos).map(([k, v]) => NAV_STATS[k]
+      ? `<div class="card nav" role="button" tabindex="0" data-nav="${NAV_STATS[k]}" title="Abrir la sección">${k}<br><b>${v}</b></div>`
+      : `<div class="card">${k}<br><b>${v}</b></div>`).join("");
     $("stats").innerHTML = html; $("stats2").innerHTML = html;
   } catch (e) { $("stats").innerHTML = "<p class='nota'>" + esc(e.message) + "</p>"; }
 }

@@ -69,6 +69,9 @@ section{background:transparent}
 .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(158px,1fr));gap:13px}
 .card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:15px;color:var(--muted);font-size:13.5px}
 .card b{display:block;font-size:27px;margin-top:3px;color:#fff}
+.card.nav{cursor:pointer;transition:background .15s,border-color .15s}
+.card.nav:hover{background:var(--surface2);border-color:rgba(255,0,51,.55)}
+.card.nav:focus-visible{outline:2px solid var(--red);outline-offset:2px;background:var(--surface2);border-color:rgba(255,0,51,.55)}
 .grid2{display:grid;grid-template-columns:1fr 1fr;gap:20px}
 @media(max-width:800px){.grid2{grid-template-columns:1fr}
   #app{flex-direction:column}aside{width:100%;height:auto;position:static}}
