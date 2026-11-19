@@ -42,6 +42,14 @@ class ApiClient:
                       json={"events": events, "clips": clips})
         r.raise_for_status()
         return r.json()
+    def reportar_progreso(self, session_id, bytes_captura):
+        """Actualiza el contador de bytes de la sesión. Si la red falla, no tumba el bucle."""
+        try:
+            r = self._req("POST", f"/workers/sessions/{session_id}/progreso",
+                          json={"bytes": int(bytes_captura or 0)})
+            return r.status_code == 200
+        except requests.RequestException:
+            return False
     def reclamar(self):
         r = self._req("POST", "/jobs/claim")
         r.raise_for_status()
@@ -88,6 +96,38 @@ class ApiClient:
             if intento < max(1, reintentos):
                 _time.sleep(2 * intento)
         raise ultimo
+    def subir_subtitulado(self, clip_id, ruta, reintentos=3):
+        """Sube el MP4 con subtítulos ya quemados. No envía la ruta local:
+        el servidor lo guarda con la clave del clip."""
+        import time as _time
+        ultimo = None
+        for intento in range(1, max(1, reintentos) + 1):
+            try:
+                with open(ruta, "rb") as f:
+                    r = requests.post(self.base + f"/clips/{clip_id}/subtitulado",
+                                      headers={**self.headers, "Content-Type": "video/mp4"},
+                                      data=f, timeout=600)
+                if r.status_code < 500:
+                    r.raise_for_status()
+                    return r.json()
+                ultimo = requests.HTTPError(f"HTTP {r.status_code} al subir subtítulos del clip {clip_id}")
+            except requests.RequestException as e:
+                ultimo = e
+            if intento < max(1, reintentos):
+                _time.sleep(2 * intento)
+        raise ultimo
+    def reportar_subtitulos(self, file_path, estado, error="", texto="", subtitulo_path=""):
+        """Avisa al panel el resultado de los subtítulos. Nunca lanza: un fallo
+        de red no afecta a la grabación ni borra el clip original."""
+        try:
+            r = self._req("POST", "/workers/clips/subtitulos", json={
+                "file_path": file_path, "estado": estado, "error": error or "",
+                "texto": texto or "", "subtitulo_path": ""})
+            if r.status_code >= 400:
+                return {"ok": False, "motivo": f"HTTP {r.status_code}"}
+            return r.json()
+        except requests.RequestException as e:
+            return {"ok": False, "motivo": str(e)}
     def fallar(self, job_id, error):
         try:
             self._req("POST", f"/jobs/{job_id}/fail", json={"error": str(error)})

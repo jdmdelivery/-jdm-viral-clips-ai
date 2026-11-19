@@ -12,6 +12,7 @@ privado/no disponible o la plataforma no entrega la señal, se lanza
 ErrorResolucion con el motivo en español y el trabajo falla con ese
 mensaje. NUNCA se finge una grabación que no existe."""
 import subprocess, sys
+from pathlib import Path
 from urllib.parse import urlparse
 
 DOMINIOS_PLATAFORMA = ("youtube.com", "youtu.be", "facebook.com", "fb.watch",
@@ -69,7 +70,9 @@ def _error_desde_stderr(stderr):
     if ("sign in to confirm" in baja or "login required" in baja
             or "log in to" in baja or "cookies" in baja or "age" in baja and "confirm" in baja):
         return ("La plataforma pide iniciar sesión para entregar esta señal; sin la "
-                "sesión del dueño, el trabajador no puede resolverla.")
+                "sesión del dueño, el trabajador no puede resolverla. No se intenta "
+                "entrar a la cuenta. Usa un HLS o RTMP de una emisión que controles, "
+                "o importa un video propio.")
     if "certificate_verify_failed" in baja or "certificate verify failed" in baja:
         return ("La conexión con la plataforma no pasó la verificación de seguridad "
                 "(certificado SSL). Suele causarlo un proxy/antivirus de la red de "
@@ -83,9 +86,19 @@ def _error_desde_stderr(stderr):
             break
     return f"La plataforma no entregó la señal de ese enlace: {detalle[:300]}"
 
+def es_archivo_local(url):
+    """True si la fuente es un archivo que ya está en esta PC."""
+    try:
+        ruta = Path(str(url))
+        return ruta.is_file() and ruta.stat().st_size > 0
+    except OSError:
+        return False
+
 def resolver_fuente(url):
     """Devuelve la URL lista para FFmpeg. Ver docstring del módulo."""
     u = str(url)
+    if es_archivo_local(u):
+        return str(Path(u).resolve())
     if es_senal_directa(u):
         return u
     rc, out, err = _ejecutar_ytdlp(u)

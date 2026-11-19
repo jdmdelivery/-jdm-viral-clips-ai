@@ -20,14 +20,17 @@ def analizar_video(fuente, outdir, modo="general", pre_s=20, post_s=15,
     t0 = time.time()
     outdir = Path(outdir); outdir.mkdir(parents=True, exist_ok=True)
     total = duracion(fuente)
-    segs = segmentar_archivo(fuente, outdir / "segmentos")
+    # Carpeta nueva: una análisis no debe leer ni mezclar segmentos de una
+    # captura anterior que hayan quedado en el mismo proyecto.
+    segdir = outdir / f"segmentos-{time.strftime('%Y%m%d-%H%M%S')}"
+    segs = segmentar_archivo(fuente, segdir)
     # Línea de tiempo REAL: el muxer corta en keyframes, así que cada segmento se mide
     # y los inicios se acumulan. Nunca se asume que el segmento i empieza en i*10.
     from recorder import duracion_real
     inicios, cursor = [], 0.0
     for p in segs:
         inicios.append(cursor); cursor += duracion_real(p)
-    buf = BufferCircular(outdir / "segmentos", minutos=10)
+    buf = BufferCircular(segdir, minutos=10)
     for i, p in enumerate(segs):
         buf.registrar(str(p), i, round(inicios[i], 3), round(inicios[min(i + 1, len(segs) - 1)] - inicios[i] if i + 1 < len(segs) else total - inicios[i], 3))
     eventos, mediciones = [], []
@@ -62,6 +65,8 @@ def analizar_video(fuente, outdir, modo="general", pre_s=20, post_s=15,
         ini, fin = contexto(ev["start_s"], ev["end_s"], total, pre_s, post_s)
         salida = outdir / "clips" / f"clip-evento-{ev['_segmento']}.mp4"
         salida.parent.mkdir(exist_ok=True)
+        if salida.exists():
+            salida = salida.with_name(f"clip-evento-{ev['_segmento']}-{int(time.time())}.mp4")
         exportar_clip(fuente, ini, fin, salida, "9:16")
         thumb = miniatura(salida, 1, salida.with_suffix(".jpg"))
         texto_tr = None

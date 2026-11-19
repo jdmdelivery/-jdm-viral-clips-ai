@@ -20,7 +20,7 @@ o al detener la grabación, y nunca se repite un momento ya reportado
 import subprocess, threading, time
 from pathlib import Path
 import viral, vision
-from clipper import contexto, exportar_clip, miniatura
+from clipper import contexto, exportar_clip, miniatura, clip_tiene_video
 from titles import generar as generar_titulos
 from dedup import _solape_ratio
 
@@ -97,6 +97,8 @@ class RadarSesion:
         if salida.exists():
             salida = salida.with_name(f"clip-radar-{int(ventana['start_s'])}s-{int(time.time())}.mp4")
         exportar_clip(str(unido), max(0.0, ini - base), fin - base, salida, "9:16")
+        if not clip_tiene_video(salida):
+            raise RuntimeError("El clip del radar quedó sin video.")
         thumb = miniatura(salida, 1, salida.with_suffix(".jpg"))
         try: unido.unlink(missing_ok=True); lista.unlink(missing_ok=True)
         except Exception: pass

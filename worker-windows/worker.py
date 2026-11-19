@@ -10,7 +10,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from sync import ApiClient
 from recorder import Recorder
 from analyzer import analizar_video
-from resolver import resolver_fuente, es_pagina_plataforma
+from resolver import resolver_fuente, es_pagina_plataforma, es_archivo_local
 from radar import RadarSesion
 
 grabaciones = {}  # session_id -> Recorder
@@ -52,6 +52,11 @@ def procesar(job, cfg, api=None):
     tipo, p = job["type"], job.get("payload", {})
     if tipo == "iniciar_grabacion":
         sid = p["session_id"]
+        otras = [k for k in grabaciones if k != sid]
+        if otras:
+            raise RuntimeError(
+                f"Este trabajador ya graba la sesión {otras[0]}. "
+                "No se inicia otra captura hasta detener esa.")
         url = p["url"]
         # Regla de Jose (2026-11-14): los enlaces de plataformas se resuelven
         # AQUÍ, en la PC, ANTES de grabar (resolver.py/yt-dlp). Si la señal no
@@ -60,16 +65,28 @@ def procesar(job, cfg, api=None):
         # una grabación. Al Recorder se le pasa un callable de re-resolución
         # para las reconexiones (las URLs de señal de plataformas caducan).
         senal = resolver_fuente(url)
-        refrescar = (lambda: resolver_fuente(url)) if es_pagina_plataforma(url) else None
+        local = es_archivo_local(senal)
+        refrescar = None if local or not es_pagina_plataforma(url) else (lambda: resolver_fuente(url))
         rec = Recorder(senal, Path(cfg["carpeta_grabaciones"]) / f"sesion-{sid}",
-                       buffer_min=cfg.get("buffer_min", 5), en_vivo=True, resolver=refrescar)
-        rec.start(); grabaciones[sid] = rec
-        nota = "Grabación iniciada en proceso separado; sigue aunque se procesen clips."
+                       buffer_min=cfg.get("buffer_min", 5), en_vivo=not local, resolver=refrescar)
+        rec.start()
+        ok, info = rec.esperar_datos(timeout=float(cfg.get("espera_captura_s", 30)))
+        if not ok:
+            try: rec.stop()
+            except Exception: rec.detener_flag.set()
+            raise RuntimeError(info if isinstance(info, str) else "No hubo captura de video.")
+        grabaciones[sid] = rec
+        nota = "Captura confirmada: hay video en disco."
+        if info.get("tiene_audio"): nota += " También hay audio."
+        else: nota += " Esta fuente no entregó pista de audio."
         if refrescar: nota += " Señal resuelta desde el enlace de la plataforma en esta PC."
+        if local: nota += " Fuente: archivo local autorizado."
         if p.get("radar_activo") or p.get("radar"):
             _activar_radar(sid, rec, cfg, api, p.get("mode", "general"))
-            nota += " Radar en vivo ACTIVADO."
-        return {"estado": "grabando", "nota": nota}
+            nota += " Radar analizando la captura real."
+        return {"estado": "grabando", "bytes": info["bytes"], "tiene_video": True,
+                "tiene_audio": bool(info.get("tiene_audio")), "archivo": info.get("archivo"),
+                "nota": nota}
     if tipo == "radar_sesion":
         # Enciende/apaga el radar en vivo de la grabación en curso de la sesión.
         sid = p["session_id"]; activo = bool(p.get("activo"))
@@ -94,7 +111,14 @@ def procesar(job, cfg, api=None):
         # revisa también el último segmento y reporta lo que quedara abierto.
         radar = radares.pop(sid, None)
         if radar: radar.detener()
-        return {"estado": "detenida", "grabacion_completa": completa}
+        nota = ""
+        if not completa:
+            nota = getattr(rec, "error_union", "") or "La captura se detuvo, pero no quedó el archivo de la grabación completa."
+        bytes_final = 0
+        if completa:
+            try: bytes_final = Path(completa).stat().st_size
+            except OSError: bytes_final = 0
+        return {"estado": "detenida", "grabacion_completa": completa, "nota": nota, "bytes": bytes_final}
     if tipo == "analizar_video":
         salida = Path(cfg["carpeta_clips"]) / f"proyecto-{p.get('project_id', 'x')}"
         r = analizar_video(resolver_archivo(p, cfg, api), salida, modo=p.get("mode", "general"),
@@ -110,7 +134,7 @@ def procesar(job, cfg, api=None):
         # event_id/project_id/session_id, start_s/end_s, mode y file_path
         # (ruta del proyecto en ESTE trabajador). Sin file_path pero con
         # sesión, la fuente es la grabación completa de esa sesión.
-        from clipper import exportar_clip, miniatura, contexto
+        from clipper import exportar_clip, miniatura, ventana_solicitada, clip_tiene_video
         from analyzer import duracion
         from titles import generar as generar_titulos
         if not p.get("file_path") and p.get("session_id"):
@@ -121,13 +145,15 @@ def procesar(job, cfg, api=None):
                              "grabación de sesión): no se puede generar el clip.")
         fuente = resolver_archivo(p, cfg, api)
         total = duracion(fuente)
-        ini, fin = contexto(float(p["start_s"]), float(p["end_s"]), total,
-                            cfg.get("pre_s", 20), cfg.get("post_s", 15))
+        ini, fin = ventana_solicitada(float(p["start_s"]), float(p["end_s"]), total,
+                                      p.get("largo_s"), cfg.get("pre_s", 20), cfg.get("post_s", 15))
         carpeta = (f"proyecto-{p['project_id']}" if p.get("project_id")
                    else f"sesion-{p['session_id']}" if p.get("session_id") else "eventos")
         salida = Path(cfg["carpeta_clips"]) / carpeta / f"clip-evento-{p.get('event_id', 'x')}.mp4"
         salida.parent.mkdir(parents=True, exist_ok=True)
         exportar_clip(fuente, ini, fin, salida, "9:16")
+        if not clip_tiene_video(salida):
+            raise RuntimeError("El clip no contiene video. No se marca el trabajo como completado.")
         thumb = miniatura(salida, 1, salida.with_suffix(".jpg"))
         score = int(p.get("score", 0))
         tit = generar_titulos(p.get("type", "general"), p.get("mode", "general"), score)
@@ -175,6 +201,19 @@ def procesar(job, cfg, api=None):
         r = api.subir_clip(int(p["clip_id"]), ruta)
         return {"subido": True, "clip_id": p["clip_id"],
                 "bytes": (r or {}).get("bytes"), "archivo_local": ruta}
+    if tipo == "corregir_subtitulos":
+        from subtitulos import aplicar_texto
+        ruta = p.get("file_path")
+        if not ruta or not Path(ruta).is_file():
+            raise FileNotFoundError("El clip original no está en esta PC: no se modificó nada.")
+        hecho = aplicar_texto(ruta, p.get("texto") or "")
+        if not hecho.get("ok"):
+            raise RuntimeError(hecho.get("error") or "No se pudo aplicar el texto.")
+        if api is None:
+            raise RuntimeError("Sin cliente de API: el video local quedó listo y el original sigue igual.")
+        api.reportar_subtitulos(ruta, "sincronizando", "", hecho.get("texto") or "", "")
+        subido = api.subir_subtitulado(int(p["clip_id"]), hecho["subtitulado"])
+        return {"corregido": True, "clip_id": p["clip_id"], "bytes": (subido or {}).get("bytes")}
     raise ValueError(f"Tipo de trabajo no soportado: {tipo}")
 
 def _subir_copias_automaticas(resultado, detalle, api):
@@ -257,16 +296,29 @@ def main():
     args = ap.parse_args()
     cfg = json.loads(Path(args.config).read_text(encoding="utf-8-sig"))
     _configurar_log(cfg)
-    try:
-        threading.Thread(target=_hilo_actualizador, args=(args.config,),
-                         daemon=True).start()
-    except Exception as e:
-        print(f"Actualizador: no se pudo iniciar el hilo: {e}")
+    # actualizar=false solo en esta PC: evita que el manifiesto publicado
+    # reemplace el motor local que todavía no está en el repositorio remoto.
+    if cfg.get("actualizar", True):
+        try:
+            threading.Thread(target=_hilo_actualizador, args=(args.config,),
+                             daemon=True).start()
+        except Exception as e:
+            print(f"Actualizador: no se pudo iniciar el hilo: {e}")
+    else:
+        print("Actualizador: desactivado en esta configuración local.")
     api = ApiClient(cfg["api_url"], cfg["worker_token"], cfg.get("cola_offline", "cola-offline.json"))
     print(f"Trabajador conectado a {cfg['api_url']} — Ctrl+C para salir")
+    try:
+        from subtitulos import iniciar_cola
+        iniciar_cola(cfg, api, lambda: bool(grabaciones))
+    except Exception as e:
+        print(f"Subtítulos: la cola no arrancó ({e}). La grabación y el radar siguen igual.")
     while True:
         try:
             api.heartbeat(VERSION); api.sincronizar_pendientes()
+            for sid_b, rec_b in list(grabaciones.items()):
+                try: api.reportar_progreso(sid_b, rec_b.bytes_en_disco())
+                except Exception: pass
             job = api.reclamar()
             if job:
                 print(f"Trabajo {job['id']}: {job['type']}")

@@ -2,8 +2,8 @@
 
 aplicar_edicion(fuente, salida, params) soporta:
   - recorte: trim_start_s / trim_end_s (segundos dentro del clip fuente)
-  - reencuadre: formato ("9:16"/"16:9"/"1:1", reutiliza la composición de
-    clipper con fondo desenfocado), zoom (factor >= 1, crop central) y
+  - reencuadre: formato ("9:16"/"16:9"/"1:1", la imagen llena el cuadro
+    sin fondo borroso), zoom (factor >= 1, crop central) y
     offset_x / offset_y en -1..1 que desplazan la ventana de crop
   - volumen: volumen_factor (p. ej. 0.5) o volumen_db (p. ej. -6)
   - texto: texto + texto_activo (drawtext con fuente del sistema; posición
@@ -143,9 +143,7 @@ def aplicar_edicion(fuente, salida, params=None):
         entrada_v = "[vz]"
     if formato:
         w, h = FORMATOS[formato]
-        cadena.append(f"{entrada_v}scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h},gblur=sigma=40[bg]")
-        cadena.append(f"{entrada_v}scale={w}:{h}:force_original_aspect_ratio=decrease[fg]")
-        cadena.append("[bg][fg]overlay=(W-w)/2:(H-h)/2[vref]")
+        cadena.append(f"{entrada_v}scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h}[vref]")
         entrada_v = "[vref]"
     else:
         cadena.append(f"{entrada_v}null[vref]")

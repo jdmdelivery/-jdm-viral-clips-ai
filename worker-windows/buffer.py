@@ -26,7 +26,14 @@ class BufferCircular:
     def proteger(self, indices):
         self.protegidos.update(indices)
     def podar(self, ahora_s=None):
-        """Borra segmentos fuera de la ventana salvo protegidos. Devuelve cuántos borró."""
+        """Borra segmentos fuera de la ventana salvo protegidos.
+        No borra nada hasta que la película completa exista y tenga tamaño real."""
+        film = self.dir / "grabacion_completa.mp4"
+        try:
+            if not film.is_file() or film.stat().st_size < 8192:
+                return 0
+        except OSError:
+            return 0
         m = self._manifest()
         if not m: return 0
         fin = ahora_s if ahora_s is not None else max(x["inicio_s"] + x["duracion_s"] for x in m)
