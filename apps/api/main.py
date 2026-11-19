@@ -404,6 +404,11 @@ def _clip_autorizado(s, c, user):
         ses = s.get(LiveSession, c.session_id)
         if ses and ses.user_id and ses.user_id != user.id: return False
     return True
+def _nombre_descarga(ruta, respaldo):
+    """Nombre de archivo, también si la ruta viene de Windows y la API corre en Linux."""
+    texto = str(ruta or "").replace("\\", "/").rstrip("/")
+    nombre = texto.split("/")[-1] if texto else ""
+    return nombre or respaldo
 def _archivo_clip(c):
     """Archivo que se puede reproducir: el original local si está en esta PC,
     y si no, la copia subida. Nunca una ruta recibida en la petición."""
@@ -1175,7 +1180,7 @@ def _respuesta_r2(c, descargar, rango, uri=None, nombre=None):
         resp.close()
         raise HTTPException(404, "La copia del clip no está en R2.")
     if not nombre:
-        nombre = Path(c.file_path).name if c.file_path else f"clip-{c.id}.mp4"
+        nombre = _nombre_descarga(c.file_path, f"clip-{c.id}.mp4")
     headers = {"Accept-Ranges": "bytes"}
     if resp.headers.get("Content-Range"):
         headers["Content-Range"] = resp.headers["Content-Range"]
@@ -1566,7 +1571,7 @@ def obtener_archivo_clip(cid: int, request: Request, descargar: int = 0, user=De
         s.close()
         return respuesta
     if descargar:
-        nombre = Path(c.file_path).name if c.file_path else f"clip-{cid}.mp4"
+        nombre = _nombre_descarga(c.file_path, f"clip-{cid}.mp4")
         respuesta = FileResponse(c.archivo_servidor, media_type="video/mp4", filename=nombre)
     else:
         respuesta = FileResponse(c.archivo_servidor, media_type="video/mp4")

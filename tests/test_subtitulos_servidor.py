@@ -321,3 +321,5 @@ def test_original_en_r2_se_reproduce_aunque_la_ruta_local_no_exista(monkeypatch,
     assert media.status_code == 200 and media.content == ORIGINAL
     assert descarga.status_code == 200 and descarga.content == ORIGINAL
     assert "andrea-vertical.mp4" in (descarga.headers.get("content-disposition") or "")
+    assert "\\" not in (descarga.headers.get("content-disposition") or "")
+    assert apimain._nombre_descarga(r"C:\clips\sesion-16\clip-evento-x.mp4", "clip.mp4") == "clip-evento-x.mp4"
