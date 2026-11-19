@@ -410,7 +410,10 @@ def _archivo_clip(c):
     if c and c.file_path:
         p = Path(c.file_path)
         if p.is_file(): return p.resolve()
-    if _tiene_copia(c): return Path(c.archivo_servidor).resolve()
+    copia = getattr(c, "archivo_servidor", None) if c else None
+    if copia and not almacen_r2.es_uri(copia):
+        p = Path(copia)
+        if p.is_file(): return p.resolve()
     return None
 def _rutas_subtitulos(file_path):
     """JSON, ASS y MP4 derivado, siempre junto al original y con otro nombre."""

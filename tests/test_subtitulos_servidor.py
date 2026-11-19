@@ -302,3 +302,22 @@ def test_r2_guarda_subtitulado_sin_disco_y_no_pisa(monkeypatch, tmp_path):
     assert visto.status_code == 200 and visto.content == BYTES
     assert client.delete(f"/clips/{cid}", headers=dueno).status_code == 200
     assert clave not in falso.objs
+
+
+def test_original_en_r2_se_reproduce_aunque_la_ruta_local_no_exista(monkeypatch, tmp_path):
+    """En Render la ruta de Windows no existe. La copia R2 debe reproducirse, no devolver 500."""
+    falso = _R2Falso()
+    monkeypatch.setattr(apimain.almacen_r2, "desde_entorno", lambda: falso)
+    monkeypatch.setenv("RENDER", "true")
+    monkeypatch.delenv("JDM_MEDIOS_DIR", raising=False)
+    dueno = _entrar("r2-original@test.do")
+    wh = _worker(dueno)
+    cid, _sid = _clip("r2-original@test.do", r"C:\no-existe\andrea-vertical.mp4")
+    r = client.post(f"/clips/{cid}/archivo", content=ORIGINAL, headers=wh)
+    assert r.status_code == 200, r.text
+    assert r.json()["destino"] == "r2"
+    media = client.get(f"/clips/{cid}/media", headers=dueno)
+    descarga = client.get(f"/clips/{cid}/download", headers=dueno)
+    assert media.status_code == 200 and media.content == ORIGINAL
+    assert descarga.status_code == 200 and descarga.content == ORIGINAL
+    assert "andrea-vertical.mp4" in (descarga.headers.get("content-disposition") or "")
