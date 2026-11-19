@@ -33,6 +33,9 @@ def test_buffer_protege_eventos(tmp_path):
         p = tmp_path / f"seg_{i:05d}.mp4"; p.write_bytes(b"x")
         b.registrar(str(p), i, i * 10, 10)
     b.proteger({28})
+    # No se poda hasta que la película completa exista: así un fallo de unión
+    # no borra los segmentos. El archivo de prueba no es una grabación real.
+    (tmp_path / "grabacion_completa.mp4").write_bytes(b"x" * 8192)
     borrados = b.podar(ahora_s=300)
     assert borrados > 0
     assert (tmp_path / "seg_00028.mp4").exists()  # protegido sobrevive

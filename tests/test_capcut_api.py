@@ -1,13 +1,9 @@
-"""CapCut + versión del motor (lote 2026-11-14):
-- API: POST /clips/{id}/capcut encola «enviar_capcut_clip» con el primer
-  título sugerido de titles_json; 404 sin clip y 400 sin archivo.
-- API: POST /sessions/{id}/capcut encola «enviar_capcut_sesion» con los
-  clips de la sesión en orden; 400 sin clips y 404 sin sesión.
-- API: POST /workers/heartbeat acepta body opcional {"version": ...} y
+"""CapCut retirada (orden de Jose, 2026-11-14) + versión del motor.
+- POST /clips/{id}/capcut y POST /sessions/{id}/capcut ya no existen (404)
+  y no encolan enviar_capcut_clip ni enviar_capcut_sesion.
+- POST /workers/heartbeat acepta body opcional {"version": ...} y
   GET /workers expone la versión; sin body sigue funcionando (trabajadores
-  viejos).
-La verificación del payload se hace directo en la BD, como en
-test_fix_panel.py, porque GET /jobs no expone el payload."""
+  viejos)."""
 import json
 
 from fastapi.testclient import TestClient
@@ -50,13 +46,11 @@ def _crear_clip(**kw):
         s.close()
 
 
-def _job(job_id):
-    """Lee un Job directo de la BD y devuelve (type, payload dict)."""
+def _jobs_capcut():
     s = apimain.SessionLocal()
     try:
-        j = s.get(apimain.Job, job_id)
-        assert j is not None, f"No existe el job {job_id} en la BD"
-        return j.type, json.loads(j.payload or "{}")
+        tipos = ("enviar_capcut_clip", "enviar_capcut_sesion")
+        return s.query(apimain.Job).filter(apimain.Job.type.in_(tipos)).count()
     finally:
         s.close()
 
@@ -67,18 +61,10 @@ def test_clip_capcut_usa_primer_titulo_sugerido():
     cid = _crear_clip(file_path="C:/clips/clip-capcut.mp4", title="Título propio",
                       titles_json=json.dumps({"titulos": ["Titulo Uno", "Otro"]}),
                       duration_s=42.5, score=90)
+    antes = _jobs_capcut()
     r = client.post(f"/clips/{cid}/capcut", headers=h)
-    assert r.status_code == 200, r.text
-    d = r.json()
-    assert d["job_id"] and d["status"] == "pendiente"
-    assert "CapCut" in d["nota"] and "borradores" in d["nota"]
-    tipo, payload = _job(d["job_id"])
-    assert tipo == "enviar_capcut_clip"
-    assert payload["clip_id"] == cid
-    assert payload["title"] == "Titulo Uno"
-    assert payload["file_path"] == "C:/clips/clip-capcut.mp4"
-    assert payload["duration_s"] == 42.5
-    assert "project_id" in payload
+    assert r.status_code == 404, r.text
+    assert _jobs_capcut() == antes
 
 
 def test_clip_capcut_titulo_de_respaldo():
@@ -86,14 +72,12 @@ def test_clip_capcut_titulo_de_respaldo():
     # titles_json inválido -> cae a c.title; sin ninguno -> «Clip {cid}».
     cid = _crear_clip(file_path="/tmp/con-titulo.mp4", title="Solo título propio",
                       titles_json="esto no es json")
-    d = client.post(f"/clips/{cid}/capcut", headers=h).json()
-    _, payload = _job(d["job_id"])
-    assert payload["title"] == "Solo título propio"
+    antes = _jobs_capcut()
+    assert client.post(f"/clips/{cid}/capcut", headers=h).status_code == 404
     cid2 = _crear_clip(file_path="/tmp/sin-titulo.mp4", title=None,
                        titles_json=json.dumps({"titulos": []}))
-    d = client.post(f"/clips/{cid2}/capcut", headers=h).json()
-    _, payload = _job(d["job_id"])
-    assert payload["title"] == f"Clip {cid2}"
+    assert client.post(f"/clips/{cid2}/capcut", headers=h).status_code == 404
+    assert _jobs_capcut() == antes
 
 
 def test_clip_capcut_inexistente_404():
@@ -105,9 +89,10 @@ def test_clip_capcut_inexistente_404():
 def test_clip_capcut_sin_archivo_400():
     h = _usuario()
     cid = _crear_clip(file_path=None, title="Sin archivo")
+    antes = _jobs_capcut()
     r = client.post(f"/clips/{cid}/capcut", headers=h)
-    assert r.status_code == 400
-    assert r.json()["detail"] == "El clip no tiene archivo asociado"
+    assert r.status_code == 404
+    assert _jobs_capcut() == antes
 
 
 # ---------- POST /sessions/{id}/capcut ----------
@@ -123,28 +108,20 @@ def test_sesion_capcut_con_dos_clips_en_orden():
                      title="Segundo propio", titles_json="{}", duration_s=35.0)
     # Un clip de OTRA sesión no debe colarse en el proyecto.
     _crear_clip(session_id=None, file_path="C:/clips/ajeno.mp4", title="Ajeno")
+    antes = _jobs_capcut()
     r = client.post(f"/sessions/{sid}/capcut", headers=h)
-    assert r.status_code == 200, r.text
-    d = r.json()
-    assert d["clips"] == 2 and "CapCut" in d["nota"]
-    tipo, payload = _job(d["job_id"])
-    assert tipo == "enviar_capcut_sesion"
-    assert payload["session_id"] == sid
-    assert payload["titulo_sesion"] == "Sesión para CapCut"
-    assert [c["file_path"] for c in payload["clips"]] == [
-        "C:/clips/primero.mp4", "C:/clips/segundo.mp4"]  # orden por id asc
-    assert payload["clips"][0]["title"] == "Primero sugerido"
-    assert payload["clips"][1]["title"] == "Segundo propio"
-    assert payload["clips"][0]["duration_s"] == 30.0
-    assert c1 < c2  # la inserción fue en ese orden
+    assert r.status_code == 404, r.text
+    assert _jobs_capcut() == antes
+    assert c1 < c2
 
 
 def test_sesion_capcut_sin_clips_400():
     h = _usuario()
     ses = _sesion(h, "Sesión vacía")
+    antes = _jobs_capcut()
     r = client.post(f"/sessions/{ses['id']}/capcut", headers=h)
-    assert r.status_code == 400
-    assert r.json()["detail"] == "La sesión no tiene clips generados todavía"
+    assert r.status_code == 404
+    assert _jobs_capcut() == antes
 
 
 def test_sesion_capcut_inexistente_404():

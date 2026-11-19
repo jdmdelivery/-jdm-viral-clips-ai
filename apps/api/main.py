@@ -7,7 +7,7 @@ from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
 
 from fastapi import Body, Depends, FastAPI, File, Header, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from sqlalchemy import (Boolean, Column, DateTime, Float, ForeignKey, Integer,
@@ -17,6 +17,7 @@ from sqlalchemy.orm import declarative_base, sessionmaker
 sys.path.insert(0, str(Path(__file__).parent))
 from titles import generar as generar_titulos  # noqa: E402
 import social as social_lib  # noqa: E402  (Etapa 4: OAuth/publicación real)
+import almacen_r2  # noqa: E402  copia de clips en Cloudflare R2, si está configurado
 
 BASE_DIR = Path(__file__).resolve().parents[2]
 DATA_DIR = BASE_DIR / "data"; DATA_DIR.mkdir(exist_ok=True)
@@ -29,10 +30,37 @@ LOGO_MAX_BYTES = 5 * 1024 * 1024  # límite de subida de logos (Etapa 3): 5 MB
 # siempre queda en la PC del trabajador.
 CLIPS_DIR = DATA_DIR / "clips_servidor"; CLIPS_DIR.mkdir(exist_ok=True)
 CLIP_MAX_BYTES = 200 * 1024 * 1024  # límite de la copia subida por el trabajador
+def directorio_medios():
+    """Dónde quedan las copias que la API puede leer.
+
+    JDM_MEDIOS_DIR, si está definida, es la carpeta persistente (en Render
+    tiene que ser un disco que sobreviva reinicios). Sin esa variable, Render
+    no escribe en su disco efímero. En esta PC se usa data/clips_servidor,
+    que permanece aunque se reinicie la API.
+    """
+    explicito = os.environ.get("JDM_MEDIOS_DIR", "").strip()
+    if explicito:
+        carpeta = Path(explicito)
+        carpeta.mkdir(parents=True, exist_ok=True)
+        return carpeta
+    if os.environ.get("RENDER", "").strip().lower() in {"1", "true", "yes"}:
+        return None
+    return CLIPS_DIR
+def clave_subtitulado(cid):
+    return f"clip_{int(cid)}.subtitulado.mp4"
 DATABASE_URL = os.environ.get("DATABASE_URL", f"sqlite:///{DATA_DIR}/jdm.db")
 if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
-engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {})
+_es_sqlite = DATABASE_URL.startswith("sqlite")
+engine = create_engine(
+    DATABASE_URL,
+    connect_args={"check_same_thread": False} if _es_sqlite else {
+        "connect_timeout": 10,
+        "options": "-c statement_timeout=25000",
+    },
+    pool_pre_ping=not _es_sqlite,
+    pool_recycle=280 if not _es_sqlite else -1,
+)
 SessionLocal = sessionmaker(bind=engine, autoflush=False)
 Base = declarative_base()
 now = lambda: datetime.now(timezone.utc)  # noqa: E731
@@ -68,6 +96,11 @@ class LiveSession(Base):
     # clips DURANTE la grabación. En BD existentes lo añade la migración 003;
     # create_all lo crea solo en BD nuevas.
     radar_activo = Column(Boolean, default=False)
+    # Texto del último fallo de fuente (YouTube pide sesión, señal vacía, etc.).
+    # Vacío si la última captura sí confirmó video.
+    error_fuente = Column(Text, default="")
+    # Bytes del primer archivo con video real. 0 = nunca hubo captura.
+    bytes_captura = Column(Integer, default=0)
     created_at = Column(DateTime, default=now); user_id = Column(Integer, ForeignKey("users.id"))
 class Source(Base):
     __tablename__ = "sources"
@@ -109,6 +142,14 @@ class Clip(Base):
     # ver/descargar desde el panel; NULL = sin copia. En BD existentes la
     # añade la auto-migración; create_all la crea solo en BD nuevas.
     archivo_servidor = Column(Text, nullable=True)
+    # Estado de subtítulos en la base. subtitulo_path guarda solo la clave
+    # relativa dentro del almacén (clip_12.subtitulado.mp4), nunca una ruta
+    # de Windows. En producción estas columnas ya existen; create_all las
+    # crea en bases nuevas y la auto-migración las añade si faltan.
+    subtitulo_estado = Column(String, default="")
+    subtitulo_error = Column(Text, default="")
+    subtitulo_texto = Column(Text, default="")
+    subtitulo_path = Column(Text, nullable=True)
     created_at = Column(DateTime, default=now)
 class Job(Base):
     __tablename__ = "jobs"
@@ -173,6 +214,18 @@ _COLUMNAS_POST_001 = [
      {"postgresql": "BOOLEAN DEFAULT FALSE", "sqlite": "BOOLEAN DEFAULT 0"}),
     # copia del clip en el servidor para ver/descargar desde el panel
     ("clips", "archivo_servidor",
+     {"postgresql": "TEXT", "sqlite": "TEXT"}),
+    ("live_sessions", "error_fuente",
+     {"postgresql": "TEXT DEFAULT ''", "sqlite": "TEXT DEFAULT ''"}),
+    ("live_sessions", "bytes_captura",
+     {"postgresql": "INTEGER DEFAULT 0", "sqlite": "INTEGER DEFAULT 0"}),
+    ("clips", "subtitulo_estado",
+     {"postgresql": "VARCHAR DEFAULT ''", "sqlite": "VARCHAR DEFAULT ''"}),
+    ("clips", "subtitulo_error",
+     {"postgresql": "TEXT DEFAULT ''", "sqlite": "TEXT DEFAULT ''"}),
+    ("clips", "subtitulo_texto",
+     {"postgresql": "TEXT DEFAULT ''", "sqlite": "TEXT DEFAULT ''"}),
+    ("clips", "subtitulo_path",
      {"postgresql": "TEXT", "sqlite": "TEXT"}),
 ]
 def _auto_migrar_columnas():
@@ -247,8 +300,10 @@ def db():
     s = SessionLocal()
     try: yield s
     finally: s.close()
-def current_user(authorization: str = Header(default=""), s=Depends(db)):
+def current_user(request: Request, authorization: str = Header(default=""), s=Depends(db)):
     tok = authorization.replace("Bearer ", "").strip()
+    if not tok:
+        tok = (request.cookies.get("jdm_token") or "").strip()
     row = s.query(SessionToken).filter_by(token=tok).first() if tok else None
     if not row: raise HTTPException(401, "No autenticado")
     user = s.get(User, row.user_id)
@@ -319,7 +374,7 @@ def _payload_generar_clip(s, evento):
     return {
         "event_id": evento.id, "project_id": evento.project_id, "session_id": evento.session_id,
         "start_s": evento.start_s, "end_s": evento.end_s, "mode": evento.mode, "file_path": file_path,
-        "type": evento.type, "score": evento.score}
+        "type": evento.type, "score": evento.score, "largo_s": None}
 def _job_generar_clip_activo(s, event_id):
     """Job «generar_clip» de ese evento en estado pendiente/procesando, o None.
     Es el criterio anti-duplicados de los endpoints manuales (el piloto usa el
@@ -334,9 +389,72 @@ def _primer_clip_del_evento(s, event_id):
     """Primer Clip (por id) asociado a un evento, o None."""
     return s.query(Clip).filter_by(event_id=event_id).order_by(Clip.id).first()
 def _tiene_copia(c):
-    """True si el clip tiene copia guardada en ESTE servidor (archivo_servidor
-    marcado y el archivo existe en disco)."""
-    return bool(c and c.archivo_servidor and Path(c.archivo_servidor).is_file())
+    """True si el clip tiene copia de consulta: en R2 o en el disco de este servidor."""
+    if not c or not c.archivo_servidor:
+        return False
+    if almacen_r2.es_uri(c.archivo_servidor):
+        return True
+    return Path(c.archivo_servidor).is_file()
+def _clip_autorizado(s, c, user):
+    """Un clip de una sesión ajena no se lista ni se borra. Sin sesión (pruebas
+    y proyectos locales) sigue visible para quien ya inició sesión."""
+    if not c or not user: return False
+    if getattr(user, "role", "") == "admin": return True
+    if c.session_id:
+        ses = s.get(LiveSession, c.session_id)
+        if ses and ses.user_id and ses.user_id != user.id: return False
+    return True
+def _archivo_clip(c):
+    """Archivo que se puede reproducir: el original local si está en esta PC,
+    y si no, la copia subida. Nunca una ruta recibida en la petición."""
+    if c and c.file_path:
+        p = Path(c.file_path)
+        if p.is_file(): return p.resolve()
+    if _tiene_copia(c): return Path(c.archivo_servidor).resolve()
+    return None
+def _rutas_subtitulos(file_path):
+    """JSON, ASS y MP4 derivado, siempre junto al original y con otro nombre."""
+    if not file_path:
+        return {}
+    p = Path(file_path)
+    return {"json": p.with_name(p.stem + ".subtitulos.json"),
+            "ass": p.with_name(p.stem + ".subtitulos.ass"),
+            "mp4": p.with_name(p.stem + ".subtitulado.mp4")}
+def _archivo_subtitulado(c):
+    """MP4 subtitulado de ESTE clip, solo si es el derivado esperado junto al original."""
+    if not c or not c.file_path:
+        return None
+    esperado = _rutas_subtitulos(c.file_path).get("mp4")
+    if esperado is None:
+        return None
+    try:
+        ruta = esperado.resolve()
+        origen = Path(c.file_path).resolve()
+    except OSError:
+        return None
+    if not ruta.is_file() or ruta.parent != origen.parent:
+        return None
+    if ruta.name != origen.stem + ".subtitulado.mp4":
+        return None
+    if _es_grabacion_completa(ruta):
+        return None
+    return ruta
+def _miniatura_clip(c):
+    if c and c.thumb_path and Path(c.thumb_path).is_file():
+        return Path(c.thumb_path).resolve()
+    origen = _archivo_clip(c)
+    if origen:
+        jpg = origen.with_suffix(".jpg")
+        if jpg.is_file(): return jpg.resolve()
+    return None
+def _es_grabacion_completa(path: Path):
+    return path.name == "grabacion_completa.mp4" or "grabaciones" in path.parts and "clips" not in path.parts
+def _borrar_archivo_de_clip(path: Path):
+    if not path.is_file(): return False
+    res = path.resolve()
+    if _es_grabacion_completa(res): return False
+    res.unlink()
+    return True
 def _hay_trabajador(s):
     """True si algún trabajador latió hace ≤30 s (mismo criterio que el chip
     «Motor conectado» del panel). last_seen puede venir sin zona (SQLite):
@@ -409,6 +527,14 @@ def _ip_privada(ip_str):
     return ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast
 def validate_source(url: str):
     """Devuelve (allowed: bool, kind: str, explanation: str). Bloquea SSRF."""
+    if os.environ.get("JDM_PERMITIR_ARCHIVOS_LOCALES") == "1":
+        try:
+            ruta = Path(url.strip())
+            if ruta.is_file() and ruta.stat().st_size > 0:
+                return True, "archivo", ("Archivo local autorizado en esta PC. El trabajador lo captura "
+                                         "desde el disco; no es un enlace de plataforma.")
+        except OSError:
+            pass
     p = urlparse(url.strip())
     if p.scheme == "file":
         return False, "file", "Las rutas file:// no se aceptan por la API pública; importa el archivo por «Importar videos» o usa el trabajador local."
@@ -483,6 +609,16 @@ class LiveClipIn(BaseModel):
     score: int = 0; title: str | None = None; titles: dict = {}; subtitles: bool = False
 class LiveIngestIn(BaseModel):
     events: list[LiveEventIn] = []; clips: list[LiveClipIn] = []
+class ProgresoIn(BaseModel):
+    bytes: int = 0
+class SubtituloReporteIn(BaseModel):
+    file_path: str
+    estado: str = ""
+    error: str = ""
+    texto: str = ""
+    subtitulo_path: str = ""
+class SubtituloCorreccionIn(BaseModel):
+    texto: str = ""
 class CalendarIn(BaseModel): publication_id: int; when_at: str; note: str = ""
 class CalendarUpdateIn(BaseModel): when_at: str | None = None; note: str | None = None
 
@@ -551,16 +687,80 @@ def heartbeat(data: dict | None = Body(None), w=Depends(worker_auth), s=Depends(
 def workers(user=Depends(current_user), s=Depends(db)):
     return [ser(w, ["id", "name", "status", "last_seen", "version"]) for w in s.query(Worker).all()]
 
+# Estados que el panel puede mostrar. Cada uno sale de un hecho guardado
+# (bytes de video, job fallido, clip en disco), no de haber pulsado un botón.
+_ERRORES_SIN_REINTENTO = (
+    "iniciar sesión", "es privado", "no está disponible", "yt-dlp no está instalado",
+    "no entregó ninguna señal", "no confirmó video", "sin escribir video",
+    "no llegó video",
+)
+def _error_terminal(texto):
+    t = (texto or "").lower()
+    return any(n in t for n in _ERRORES_SIN_REINTENTO)
+def _error_inicio_job(s, sid):
+    for j in s.query(Job).filter_by(type="iniciar_grabacion").order_by(Job.id.desc()).all():
+        try: payload = json.loads(j.payload or "{}")
+        except Exception: continue
+        if payload.get("session_id") != sid: continue
+        if j.status == "fallido" and j.error: return j.error
+        return ""
+    return ""
+def _generando_clip(s, sid):
+    for j in s.query(Job).filter(Job.type == "generar_clip", Job.status.in_(["pendiente", "procesando"])).all():
+        try: payload = json.loads(j.payload or "{}")
+        except Exception: continue
+        if payload.get("session_id") == sid: return True
+    return False
+def _estado_real(s, row):
+    """Una sola etiqueta verificable para la sesión."""
+    bytes_ok = int(row.bytes_captura or 0) > 0 and row.status == "grabando"
+    error_txt = (row.error_fuente or "").strip() or _error_inicio_job(s, row.id)
+    if row.status == "error" or (error_txt and row.started_at is None and row.status not in ("grabando", "iniciando")):
+        return "ERROR DE FUENTE"
+    if _generando_clip(s, row.id):
+        return "GENERANDO CLIP"
+    if bytes_ok and row.radar_activo:
+        return "RADAR ANALIZANDO"
+    if bytes_ok:
+        return "GRABANDO"
+    if row.status == "iniciando":
+        return "FUENTE CONECTADA"
+    n_clips = s.query(Clip).filter_by(session_id=row.id).count()
+    n_ev = s.query(Event).filter_by(session_id=row.id).count()
+    if row.status == "detenida" and row.started_at is not None:
+        return "CLIP COMPLETADO" if n_clips else "GRABACIÓN DETENIDA"
+    if n_clips:
+        return "CLIP COMPLETADO"
+    if n_ev:
+        return "MOMENTO DETECTADO"
+    if s.query(Source).filter_by(session_id=row.id, allowed=True).first():
+        return "FUENTE CONECTADA"
+    return ""
+def _sesion_publica(s, row):
+    d = ser(row, ["id", "title", "mode", "status", "autopilot", "min_score", "radar_activo",
+                  "created_at", "started_at", "error_fuente", "bytes_captura"])
+    error = (d.get("error_fuente") or "").strip() or _error_inicio_job(s, row.id)
+    d["error_fuente"] = error
+    d["bytes_captura"] = int(d.get("bytes_captura") or 0)
+    d["estado_real"] = _estado_real(s, row)
+    d["radar_sin_fuente"] = bool(row.radar_activo) and not (row.status == "grabando" and d["bytes_captura"] > 0)
+    return d
+def _largo_clip(largo_s):
+    if largo_s is None: return None
+    if int(largo_s) not in (3, 5, 10, 15, 20):
+        raise HTTPException(400, "La duración del clip debe ser 3, 5, 10, 15 o 20 segundos, o vacía para automática.")
+    return int(largo_s)
+
 # Sesiones LIVE y fuentes
 @app.post("/sessions")
 def create_session(data: SessionIn, user=Depends(current_user), s=Depends(db)):
     row = LiveSession(title=data.title, mode=data.mode, autopilot=data.autopilot, min_score=data.min_score, user_id=user.id)
     s.add(row); s.commit(); audit(s, user.email, "crear_sesion", data.title)
-    return ser(row, ["id", "title", "mode", "status", "autopilot", "min_score", "radar_activo", "created_at", "started_at"])
+    return _sesion_publica(s, row)
 @app.get("/sessions")
 def list_sessions(limit: int = 200, offset: int = 0, user=Depends(current_user), s=Depends(db)):
     q = s.query(LiveSession).offset(_clamp_offset(offset)).limit(_clamp_limit(limit))
-    return [ser(r, ["id", "title", "mode", "status", "autopilot", "min_score", "radar_activo", "created_at", "started_at"]) for r in q]
+    return [_sesion_publica(s, r) for r in q]
 @app.post("/sessions/{sid}/sources")
 def add_source(sid: int, data: SourceIn, user=Depends(current_user), s=Depends(db)):
     if not s.get(LiveSession, sid): raise HTTPException(404, "Sesión no encontrada")
@@ -576,18 +776,21 @@ def validate_only(sid: int, data: SourceIn, user=Depends(current_user)):
 def start_session(sid: int, user=Depends(current_user), s=Depends(db)):
     row = s.get(LiveSession, sid)
     if not row: raise HTTPException(404, "Sesión no encontrada")
-    # Etapa 6 + confirmación real: una sola grabación activa a la vez. Bloquea
-    # si otra sesión está grabando O todavía iniciando (el trabajador aún no
-    # confirmó el inicio); «deteniendo» ya no bloquea.
-    otra = s.query(LiveSession).filter(LiveSession.status.in_(["grabando", "iniciando"]), LiveSession.id != sid).first()
-    if otra: raise HTTPException(409, f"Ya hay otra sesión grabando («{otra.title}», id {otra.id}). Detenla antes de iniciar esta.")
+    # Una sola grabación activa. También bloquea mientras OTRA sesión está
+    # «deteniendo»: si no, al cerrar la sesión 5 se podía arrancar la 2 encima.
+    if row.status in ("grabando", "iniciando", "deteniendo"):
+        raise HTTPException(409, "Esta sesión ya tiene una captura en curso. No se inicia otra encima: deténla antes de volver a grabar.")
+    otra = s.query(LiveSession).filter(LiveSession.status.in_(["grabando", "iniciando", "deteniendo"]), LiveSession.id != sid).first()
+    if otra: raise HTTPException(409, f"Ya hay otra sesión en curso («{otra.title}», id {otra.id}, {otra.status}). Detenla antes de iniciar esta.")
     src = s.query(Source).filter_by(session_id=sid, allowed=True).first()
     if not src: raise HTTPException(400, "La sesión no tiene una fuente compatible validada. Valida primero una fuente: el enlace del en vivo de una plataforma (YouTube, Facebook, Twitch, TikTok…), un HLS (.m3u8) o un RTMP.")
     # La sesión NO pasa a «grabando» aquí: queda «iniciando» hasta que el
     # trabajador confirme completando el job «iniciar_grabacion».
-    row.status = "iniciando"; s.commit()
+    # El radar entra solo con la grabación. El botón del panel sigue pudiendo apagarlo después.
+    row.radar_activo = True
+    row.status = "iniciando"; row.error_fuente = ""; s.commit()
     job = Job(type="iniciar_grabacion", payload=json.dumps({"session_id": sid, "url": src.url, "mode": row.mode,
-                                                            "radar_activo": bool(row.radar_activo)}))
+                                                            "radar_activo": True}))
     s.add(job); s.commit(); audit(s, user.email, "iniciar_grabacion", row.title)
     return {"ok": True, "status": row.status, "job_id": job.id}
 @app.post("/sessions/{sid}/radar")
@@ -650,7 +853,26 @@ def complete_job(jid: int, body: dict, w=Depends(worker_auth), s=Depends(db)):
         _ses_conf = s.get(LiveSession, _sid_conf) if _sid_conf else None
         if _ses_conf:
             if j.type == "iniciar_grabacion":
-                _ses_conf.status = "grabando"; _ses_conf.started_at = now()
+                bytes_ok = int(res.get("bytes") or 0) > 0 and bool(res.get("tiene_video"))
+                if res.get("estado") == "grabando" and bytes_ok:
+                    _ses_conf.status = "grabando"; _ses_conf.started_at = now()
+                    _ses_conf.bytes_captura = int(res.get("bytes") or 0)
+                    _ses_conf.error_fuente = ""
+                else:
+                    _ses_conf.status = "error"; _ses_conf.bytes_captura = 0
+                    _ses_conf.error_fuente = (res.get("nota") or "El trabajador terminó el inicio sin confirmar video real.")[:2000]
+            elif res.get("estado") == "detenida":
+                _ses_conf.status = "detenida"; _ses_conf.radar_activo = False
+                if int(res.get("bytes") or 0) > int(_ses_conf.bytes_captura or 0):
+                    _ses_conf.bytes_captura = int(res.get("bytes") or 0)
+                if not res.get("grabacion_completa"):
+                    _ses_conf.error_fuente = (res.get("nota") or "La captura se detuvo, pero no quedó el archivo de la grabación completa.")[:2000]
+                else:
+                    _ses_conf.error_fuente = ""
+            elif _ses_conf.started_at is None:
+                err = (_ses_conf.error_fuente or "").strip() or _error_inicio_job(s, _ses_conf.id)
+                _ses_conf.status = "error" if err else "creada"
+                if err: _ses_conf.error_fuente = err
             else:
                 _ses_conf.status = "detenida"
             s.commit()
@@ -731,16 +953,25 @@ def fail_job(jid: int, body: dict, w=Depends(worker_auth), s=Depends(db)):
     j = s.get(Job, jid)
     if not j: raise HTTPException(404, "Trabajo no encontrado")
     j.error = str(body.get("error", "error"))[:2000]
-    j.status = "pendiente" if j.attempts < 3 else "fallido"; s.commit()
-    # Confirmación real de grabación: SOLO cuando el trabajo queda «fallido»
-    # (intentos agotados) la sesión de iniciar/detener pasa a «error»; mientras
-    # se reintenta (vuelve a «pendiente») la sesión no se toca.
-    if j.status == "fallido" and j.type in ("iniciar_grabacion", "detener_grabacion"):
+    # Un fallo de autenticación o de fuente no se reintenta: el usuario ya
+    # esperó tres pasadas de yt-dlp sin ver el motivo.
+    j.status = "fallido" if (_error_terminal(j.error) or j.attempts >= 3) else "pendiente"
+    s.commit()
+    # Al quedar «fallido» la sesión pasa a «error». Si todavía se reintenta,
+    # el estado sigue en «iniciando» pero se guarda el texto para el panel.
+    if j.type in ("iniciar_grabacion", "detener_grabacion"):
         try: _sid_err = json.loads(j.payload or "{}").get("session_id")
         except Exception: _sid_err = None
         _ses_err = s.get(LiveSession, _sid_err) if _sid_err else None
-        if _ses_err:
-            _ses_err.status = "error"; s.commit()
+        if _ses_err and j.status == "fallido":
+            _ses_err.status = "error"
+            _ses_err.error_fuente = j.error or ""
+            if j.type == "iniciar_grabacion":
+                _ses_err.bytes_captura = 0
+            s.commit()
+        elif _ses_err and j.status == "pendiente" and j.type == "iniciar_grabacion":
+            _ses_err.error_fuente = j.error or ""
+            s.commit()
     return {"ok": True, "status": j.status}
 
 # Ingesta del radar EN VIVO: el trabajador reporta momentos y clips DURANTE
@@ -780,8 +1011,17 @@ def live_events_ingest(sid: int, data: LiveIngestIn, w=Depends(worker_auth), s=D
             for idx, ev in enumerate(data.events):
                 if abs(ev.start_s - cl.start_s) < 0.01:
                     ev_id = ids_por_indice.get(idx); break
-        c = Clip(event_id=ev_id, session_id=sid, file_path=cl.file_path, format=cl.format,
-                 duration_s=cl.duration_s, score=int(cl.score), title=cl.title,
+        existente = s.query(Clip).filter_by(event_id=ev_id).order_by(Clip.id).first() if ev_id else None
+        if not existente and cl.file_path:
+            existente = s.query(Clip).filter_by(session_id=sid, file_path=cl.file_path).first()
+        if existente is not None:
+            clip_ids.append(existente.id); continue
+        thumb = None
+        if cl.file_path:
+            jpg = Path(cl.file_path).with_suffix(".jpg")
+            if jpg.is_file(): thumb = str(jpg)
+        c = Clip(event_id=ev_id, session_id=sid, file_path=cl.file_path, thumb_path=thumb,
+                 format=cl.format, duration_s=cl.duration_s, score=int(cl.score), title=cl.title,
                  titles_json=json.dumps(cl.titles or {}), subtitles=bool(cl.subtitles))
         s.add(c); s.commit(); clips_guardados += 1; clip_ids.append(c.id)
     # clip_ids alineados con data.clips: el radar los usa para subir la copia
@@ -808,6 +1048,13 @@ def list_events(session_id: int | None = None, incluir_descartados: bool = False
         clip = _primer_clip_del_evento(s, e.id)
         d["descartado"] = bool(e.descartado)
         d["duracion_s"] = round((e.end_s or 0) - (e.start_s or 0), 2)
+        sen = d["breakdown"].get("senales_medidas") or {}
+        partes = [e.type or "general"]
+        if sen.get("rms_pico_db") is not None: partes.append(f"pico de audio {sen['rms_pico_db']} dB")
+        if sen.get("cambios_escena"): partes.append(f"{sen['cambios_escena']} cambios de escena")
+        if d["breakdown"].get("nota"): partes.append(d["breakdown"]["nota"])
+        d["motivo"] = " · ".join(str(p) for p in partes)
+        d["hora"] = d.get("created_at")
         d["tiene_clip"] = clip is not None
         d["clip_id"] = clip.id if clip else None
         d["clip_file_path"] = clip.file_path if clip else None
@@ -823,7 +1070,7 @@ def descartar_evento(eid: int, user=Depends(current_user), s=Depends(db)):
     audit(s, user.email, "descartar_evento", f"evento {eid}")
     return {"ok": True, "id": eid, "descartado": True}
 @app.post("/events/{eid}/clip")
-def clip_de_evento(eid: int, user=Depends(current_user), s=Depends(db)):
+def clip_de_evento(eid: int, largo_s: int | None = None, user=Depends(current_user), s=Depends(db)):
     """Generación manual de UN clip: encola «generar_clip» con el mismo
     payload que arma el piloto automático para el evento."""
     e = s.get(Event, eid)
@@ -833,23 +1080,28 @@ def clip_de_evento(eid: int, user=Depends(current_user), s=Depends(db)):
     if clip: raise HTTPException(409, f"Ese momento ya tiene un clip (#{clip.id})")
     activo = _job_generar_clip_activo(s, eid)
     if activo: return {"job_id": activo.id, "duplicado": True}
-    job = Job(type="generar_clip", payload=json.dumps(_payload_generar_clip(s, e)))
+    payload = _payload_generar_clip(s, e)
+    payload["largo_s"] = _largo_clip(largo_s)
+    job = Job(type="generar_clip", payload=json.dumps(payload))
     s.add(job); s.commit()
     audit(s, user.email, "generar_clip_manual", f"evento {eid} -> job {job.id}")
     return {"job_id": job.id, "duplicado": False}
 @app.post("/sessions/{sid}/generar-clips")
-def generar_clips_sesion(sid: int, user=Depends(current_user), s=Depends(db)):
+def generar_clips_sesion(sid: int, largo_s: int | None = None, user=Depends(current_user), s=Depends(db)):
     """Encola «generar_clip» para cada evento NO descartado de la sesión que
     aún no tenga clip ni un job generar_clip pendiente/procesando."""
     if not s.get(LiveSession, sid): raise HTTPException(404, "Sesión no encontrada")
     eventos = (s.query(Event).filter_by(session_id=sid)
                .filter((Event.descartado == False) | (Event.descartado.is_(None)))  # noqa: E712
                .order_by(Event.id).all())
+    largo = _largo_clip(largo_s)
     jobs, omitidos = [], 0
     for e in eventos:
         if _primer_clip_del_evento(s, e.id) or _job_generar_clip_activo(s, e.id):
             omitidos += 1; continue
-        job = Job(type="generar_clip", payload=json.dumps(_payload_generar_clip(s, e)))
+        payload = _payload_generar_clip(s, e)
+        payload["largo_s"] = largo
+        job = Job(type="generar_clip", payload=json.dumps(payload))
         s.add(job); s.commit(); jobs.append(job.id)
     audit(s, user.email, "generar_clips_sesion", f"sesión {sid}: {len(jobs)} encolados, {omitidos} omitidos")
     return {"jobs": jobs, "encolados": len(jobs), "omitidos": omitidos, "total_eventos": len(eventos)}
@@ -864,25 +1116,362 @@ def list_clips(session_id: int | None = None, limit: int = 200, offset: int = 0,
     q = q.order_by(Clip.id.desc()).offset(_clamp_offset(offset)).limit(_clamp_limit(limit))
     out = []
     for c in q:
+        if not _clip_autorizado(s, c, user): continue
         d = ser(c, ["id", "event_id", "project_id", "session_id", "file_path", "thumb_path", "format", "duration_s", "score", "title", "subtitles", "status", "created_at"])
-        # «descargable» si el archivo está EN ESTE servidor: o porque su ruta
-        # vive aquí, o porque el trabajador subió una copia (archivo_servidor).
-        # La mayoría de los clips viven en el disco del trabajador (la ruta se
-        # muestra tal cual).
-        d["descargable"] = bool((c.file_path and Path(c.file_path).exists()) or _tiene_copia(c))
+        ses = s.get(LiveSession, c.session_id) if c.session_id else None
+        d["sesion_titulo"] = ses.title if ses else ""
+        d["descargable"] = _archivo_clip(c) is not None
         d["tiene_copia_servidor"] = _tiene_copia(c)
+        d["tiene_miniatura"] = _miniatura_clip(c) is not None
+        d["archivo_existe"] = bool(c.file_path and Path(c.file_path).is_file())
+        d.update(_estado_subtitulos(c))
         out.append(d)
     return out
 @app.get("/clips/{cid}/download")
-def download_clip(cid: int, user=Depends(current_user), s=Depends(db)):
+def download_clip(cid: int, request: Request, user=Depends(current_user), s=Depends(db)):
     c = s.get(Clip, cid)
     if not c: raise HTTPException(404, "Clip no encontrado")
-    if c.file_path and Path(c.file_path).exists():
-        return FileResponse(c.file_path, media_type="video/mp4", filename=Path(c.file_path).name)
-    if _tiene_copia(c):  # respaldo: la copia que subió el trabajador
-        nombre = Path(c.file_path).name if c.file_path else f"clip-{cid}.mp4"
-        return FileResponse(c.archivo_servidor, media_type="video/mp4", filename=nombre)
-    raise HTTPException(404, "Archivo del clip no disponible en este servidor (vive en el trabajador Windows)")
+    if not _clip_autorizado(s, c, user): raise HTTPException(403, "No puedes descargar un clip de otra cuenta.")
+    if _archivo_clip(c) is None and not almacen_r2.es_uri(c.archivo_servidor):
+        raise HTTPException(404, "Archivo del clip no disponible en este servidor (vive en el trabajador Windows)")
+    respuesta = _respuesta_video(c, descargar=True, rango=request.headers.get("range"))
+    s.close()
+    return respuesta
+
+def _respuesta_video(c, descargar=False, rango=None):
+    ruta = _archivo_clip(c)
+    if ruta:
+        nombre = ruta.name
+        # FileResponse atiende Range: el reproductor puede adelantar sin bajar el archivo entero.
+        if descargar:
+            return FileResponse(ruta, media_type="video/mp4", filename=nombre)
+        return FileResponse(ruta, media_type="video/mp4")
+    if almacen_r2.es_uri(getattr(c, "archivo_servidor", None)):
+        return _respuesta_r2(c, descargar, rango)
+    raise HTTPException(404, "Este clip no tiene un archivo de video en esta computadora.")
+
+def _ids_almacen(s, c):
+    """Usuario y sesión dueños del clip. Sin sesión queda separado solo por el id."""
+    sid = int(c.session_id or 0)
+    uid = 0
+    if c.session_id:
+        ses = s.get(LiveSession, c.session_id)
+        if ses and ses.user_id:
+            uid = int(ses.user_id)
+    return uid, sid
+
+def _respuesta_r2(c, descargar, rango, uri=None, nombre=None):
+    """Sirve la copia guardada en R2. No abre ni borra la grabación original."""
+    almacen = almacen_r2.desde_entorno()
+    uri = uri or getattr(c, "archivo_servidor", None)
+    bucket, clave = almacen_r2.clave_de_uri(uri or "")
+    if almacen is None or bucket != almacen.bucket or not clave or clave.endswith("grabacion_completa.mp4") or "/grabaciones/" in clave:
+        raise HTTPException(404, "La copia en R2 no está disponible en este servidor.")
+    resp = almacen.abrir(clave, rango)
+    if resp.status_code not in (200, 206):
+        resp.close()
+        raise HTTPException(404, "La copia del clip no está en R2.")
+    if not nombre:
+        nombre = Path(c.file_path).name if c.file_path else f"clip-{c.id}.mp4"
+    headers = {"Accept-Ranges": "bytes"}
+    if resp.headers.get("Content-Range"):
+        headers["Content-Range"] = resp.headers["Content-Range"]
+    if resp.headers.get("Content-Length"):
+        headers["Content-Length"] = resp.headers["Content-Length"]
+    if descargar:
+        headers["Content-Disposition"] = f'attachment; filename="{nombre}"'
+
+    def bloques():
+        try:
+            for bloque in resp.iter_content(256 * 1024):
+                if bloque:
+                    yield bloque
+        finally:
+            resp.close()
+
+    return StreamingResponse(bloques(), status_code=resp.status_code, media_type="video/mp4", headers=headers)
+
+@app.get("/clips/{cid}/media")
+def media_clip(cid: int, request: Request, descargar: int = 0, user=Depends(current_user), s=Depends(db)):
+    """Reproduce o descarga el MP4 original. No crea otra copia."""
+    c = s.get(Clip, cid)
+    if not c: raise HTTPException(404, "Clip no encontrado")
+    if not _clip_autorizado(s, c, user): raise HTTPException(403, "No puedes abrir un clip de otra cuenta.")
+    respuesta = _respuesta_video(c, descargar=bool(descargar), rango=request.headers.get("range"))
+    s.close()
+    return respuesta
+
+@app.get("/clips/{cid}/miniatura")
+def miniatura_clip(cid: int, user=Depends(current_user), s=Depends(db)):
+    c = s.get(Clip, cid)
+    if not c: raise HTTPException(404, "Clip no encontrado")
+    if not _clip_autorizado(s, c, user): raise HTTPException(403, "No puedes abrir un clip de otra cuenta.")
+    jpg = _miniatura_clip(c)
+    if not jpg: raise HTTPException(404, "Este clip no tiene miniatura.")
+    return FileResponse(jpg, media_type="image/jpeg")
+
+def _medio_subtitulado(c):
+    """MP4 subtitulado dentro del almacén de la API. Ignora rutas de Windows."""
+    if not c or c.id is None:
+        return None
+    base = directorio_medios()
+    if base is None:
+        return None
+    clave = clave_subtitulado(c.id)
+    ruta = (base / clave).resolve()
+    try:
+        ruta.relative_to(base.resolve())
+    except ValueError:
+        return None
+    if ruta.is_file() and ruta.name == clave:
+        return ruta
+    return None
+
+def _estado_subtitulos(c):
+    """Estado guardado en el clip. El video solo cuenta si está en el almacén."""
+    tiene = _medio_subtitulado(c) is not None or almacen_r2.es_uri(getattr(c, "subtitulo_path", None))
+    estado = (getattr(c, "subtitulo_estado", None) or "") if c else ""
+    if tiene and estado in {"", "sincronizando", "procesando"}:
+        estado = "listo"
+    return {"subtitulo_estado": estado, "subtitulo_error": (getattr(c, "subtitulo_error", None) or "") if c else "",
+            "subtitulo_texto": (getattr(c, "subtitulo_texto", None) or "") if c else "", "tiene_subtitulado": tiene}
+
+def _job_corregir_subtitulos(s, cid):
+    for j in (s.query(Job).filter_by(type="corregir_subtitulos")
+              .filter(Job.status.in_(["pendiente", "procesando"])).order_by(Job.id).all()):
+        try:
+            p = json.loads(j.payload or "{}")
+        except Exception:
+            continue
+        if p.get("clip_id") == cid:
+            return j
+    return None
+
+@app.get("/clips/{cid}/subtitulos")
+def leer_subtitulos(cid: int, user=Depends(current_user), s=Depends(db)):
+    c = s.get(Clip, cid)
+    if not c: raise HTTPException(404, "Clip no encontrado")
+    if not _clip_autorizado(s, c, user): raise HTTPException(403, "No puedes ver subtítulos de un clip de otra cuenta.")
+    datos = _estado_subtitulos(c)
+    datos["id"] = c.id
+    return datos
+
+@app.put("/clips/{cid}/subtitulos")
+def corregir_subtitulos(cid: int, data: SubtituloCorreccionIn, user=Depends(current_user), s=Depends(db)):
+    """Guarda el texto en el clip y encarga al trabajador el video nuevo.
+    No escribe en una ruta de Windows desde esta API."""
+    c = s.get(Clip, cid)
+    if not c: raise HTTPException(404, "Clip no encontrado")
+    if not _clip_autorizado(s, c, user): raise HTTPException(403, "No puedes corregir un clip de otra cuenta.")
+    texto = " ".join((data.texto or "").split())
+    if not texto:
+        raise HTTPException(400, "Escribe el texto de los subtítulos antes de guardarlo.")
+    if len(texto) > 4000:
+        raise HTTPException(400, "El texto supera las 4000 letras.")
+    if not c.file_path:
+        raise HTTPException(400, "Este clip no tiene archivo original en la PC.")
+    c.subtitulo_texto = texto
+    c.subtitulo_estado = "corregir"
+    c.subtitulo_error = ""
+    payload = json.dumps({"clip_id": cid, "file_path": c.file_path, "texto": texto})
+    activo = _job_corregir_subtitulos(s, cid)
+    if activo and activo.status == "pendiente":
+        activo.payload = payload
+        job_id = activo.id
+    else:
+        job = Job(type="corregir_subtitulos", payload=payload)
+        s.add(job); s.commit(); s.refresh(job)
+        job_id = job.id
+    s.commit()
+    audit(s, user.email, "corregir_subtitulos", f"clip {cid} -> job {job_id}")
+    return {"ok": True, "id": cid, "estado": "corregir", "job_id": job_id,
+            "nota": "Texto guardado. Tu PC preparará de nuevo el video con subtítulos. El original no se modifica."}
+
+@app.post("/clips/{cid}/subtitulado")
+async def subir_subtitulado(cid: int, request: Request, w=Depends(worker_auth), s=Depends(db)):
+    """El trabajador sube el MP4 ya subtitulado. Se guarda con la clave del
+    clip, sin usar la ruta de origen y sin reemplazar el original."""
+    c = s.get(Clip, cid)
+    if not c: raise HTTPException(404, "Clip no encontrado")
+    almacen = almacen_r2.desde_entorno()
+    if almacen is not None:
+        import tempfile
+        uid, sid = _ids_almacen(s, c)
+        clave = almacen_r2.clave_copia(uid, sid, cid, "subtitulado")
+        if almacen.existe(clave):
+            raise HTTPException(409, "Ya existe la copia subtitulada de este clip y no se reemplazó.")
+        declarado = request.headers.get("content-length")
+        if declarado:
+            try:
+                if int(declarado) > CLIP_MAX_BYTES:
+                    raise HTTPException(413, f"El video supera el límite ({CLIP_MAX_BYTES // (1024 * 1024)} MB)")
+            except ValueError:
+                pass
+        parcial_tmp = tempfile.NamedTemporaryFile(prefix=f"sub_{cid}_", suffix=".part", delete=False)
+        size = 0
+        try:
+            with parcial_tmp as out:
+                async for chunk in request.stream():
+                    if not chunk: continue
+                    size += len(chunk)
+                    if size > CLIP_MAX_BYTES:
+                        raise HTTPException(413, f"El video supera el límite ({CLIP_MAX_BYTES // (1024 * 1024)} MB)")
+                    out.write(chunk)
+            if size == 0:
+                raise HTTPException(400, "La subida llegó vacía: no se guardó el video con subtítulos.")
+            with open(parcial_tmp.name, "rb") as origen:
+                datos = origen.read()
+            resp = almacen.put(clave, datos, "video/mp4")
+            codigo = resp.status_code
+            resp.close()
+            if codigo not in (200, 201):
+                raise HTTPException(502, "No se pudo guardar la copia subtitulada en R2.")
+        except HTTPException:
+            raise
+        finally:
+            Path(parcial_tmp.name).unlink(missing_ok=True)
+        c.subtitulo_path = almacen.uri(clave)
+        c.subtitulo_estado = "listo"
+        c.subtitulo_error = ""
+        c.subtitles = True
+        s.commit()
+        audit(s, f"trabajador:{w.name}", "subir_subtitulado", f"clip {cid}: {size} bytes en r2")
+        return {"ok": True, "clip_id": cid, "bytes": size, "clave": clave, "destino": "r2"}
+    base = directorio_medios()
+    if base is None:
+        raise HTTPException(503, "No hay almacenamiento persistente configurado (JDM_MEDIOS_DIR). "
+                                 "No se guardó el video en el disco temporal.")
+    declarado = request.headers.get("content-length")
+    if declarado:
+        try:
+            if int(declarado) > CLIP_MAX_BYTES:
+                raise HTTPException(413, f"El video supera el límite ({CLIP_MAX_BYTES // (1024 * 1024)} MB)")
+        except ValueError:
+            pass
+    clave = clave_subtitulado(cid)
+    dest = base / clave
+    parcial = base / (clave + ".part")
+    size = 0
+    try:
+        with open(parcial, "wb") as out:
+            async for chunk in request.stream():
+                if not chunk: continue
+                size += len(chunk)
+                if size > CLIP_MAX_BYTES:
+                    raise HTTPException(413, f"El video supera el límite ({CLIP_MAX_BYTES // (1024 * 1024)} MB)")
+                out.write(chunk)
+    except HTTPException:
+        parcial.unlink(missing_ok=True)
+        raise
+    if size == 0:
+        parcial.unlink(missing_ok=True)
+        raise HTTPException(400, "La subida llegó vacía: no se guardó el video con subtítulos.")
+    parcial.replace(dest)
+    original = base / f"clip_{cid}.mp4"
+    if dest.resolve() == original.resolve():
+        dest.unlink(missing_ok=True)
+        raise HTTPException(500, "La copia subtitulada coincidía con el original y se descartó.")
+    c.subtitulo_path = clave
+    c.subtitulo_estado = "listo"
+    c.subtitulo_error = ""
+    c.subtitles = True
+    s.commit()
+    audit(s, f"trabajador:{w.name}", "subir_subtitulado", f"clip {cid}: {size} bytes")
+    return {"ok": True, "clip_id": cid, "bytes": size, "clave": clave}
+
+@app.get("/clips/{cid}/subtitulado")
+def descargar_subtitulado(cid: int, request: Request, descargar: int = 0, user=Depends(current_user), s=Depends(db)):
+    """Sirve el MP4 con subtítulos que está en el almacén. El original va por /media o /archivo."""
+    c = s.get(Clip, cid)
+    if not c: raise HTTPException(404, "Clip no encontrado")
+    if not _clip_autorizado(s, c, user): raise HTTPException(403, "No puedes abrir un clip de otra cuenta.")
+    if almacen_r2.es_uri(c.subtitulo_path):
+        respuesta = _respuesta_r2(c, bool(descargar), request.headers.get("range"), uri=c.subtitulo_path,
+                                  nombre=f"clip-{cid}-subtitulado.mp4")
+        s.close()
+        return respuesta
+    ruta = _medio_subtitulado(c)
+    if not ruta:
+        datos = _estado_subtitulos(c)
+        motivo = (datos.get("subtitulo_error") or "").strip()
+        if datos.get("subtitulo_estado") in {"error", "sin_habla"} and motivo:
+            raise HTTPException(404, motivo)
+        raise HTTPException(404, "Este clip todavía no tiene video con subtítulos. El original sigue disponible.")
+    nombre = f"clip-{cid}-subtitulado.mp4"
+    if descargar:
+        return FileResponse(ruta, media_type="video/mp4", filename=nombre)
+    return FileResponse(ruta, media_type="video/mp4")
+
+@app.post("/workers/clips/subtitulos")
+def reportar_subtitulos(data: SubtituloReporteIn, w=Depends(worker_auth), s=Depends(db)):
+    """Registra texto y estado del clip ya existente. No guarda la ruta local
+    ni crea otro clip. El video llega por POST /clips/{id}/subtitulado."""
+    c = s.query(Clip).filter(Clip.file_path == data.file_path).order_by(Clip.id.desc()).first()
+    if not c:
+        return {"ok": False, "motivo": "Ese archivo no corresponde a un clip de esta biblioteca."}
+    estado = (data.estado or "").strip()[:40]
+    if estado == "listo" and _medio_subtitulado(c) is None and not almacen_r2.es_uri(c.subtitulo_path):
+        estado = "sincronizando"
+    c.subtitulo_estado = estado
+    c.subtitulo_error = (data.error or "")[:500]
+    if (data.texto or "").strip():
+        c.subtitulo_texto = data.texto.strip()[:4000]
+    s.commit()
+    return {"ok": True, "clip_id": c.id, "tiene_subtitulado": _medio_subtitulado(c) is not None or almacen_r2.es_uri(c.subtitulo_path),
+            "sesion_id": c.session_id}
+
+@app.delete("/clips/{cid}")
+def eliminar_clip(cid: int, user=Depends(current_user), s=Depends(db)):
+    """Borra un clip y sus archivos. No toca la grabación completa, la sesión ni otros momentos."""
+    c = s.get(Clip, cid)
+    if not c: raise HTTPException(404, "Clip no encontrado")
+    if not _clip_autorizado(s, c, user): raise HTTPException(403, "No puedes eliminar un clip de otra cuenta.")
+    borrados = []
+    for uri in (c.archivo_servidor, c.subtitulo_path):
+        if not almacen_r2.es_uri(uri):
+            continue
+        bucket, clave = almacen_r2.clave_de_uri(uri)
+        almacen = almacen_r2.desde_entorno()
+        if (almacen and bucket == almacen.bucket and clave
+                and "grabaciones/" not in clave and not clave.endswith("grabacion_completa.mp4")):
+            resp = almacen.borrar(clave)
+            if resp.status_code in (200, 204, 404):
+                borrados.append(clave)
+            resp.close()
+    derivados = []
+    base = directorio_medios()
+    if base is not None:
+        clave = clave_subtitulado(cid)
+        for nombre in (clave, clave + ".part"):
+            candidato_medio = (base / nombre).resolve()
+            try:
+                candidato_medio.relative_to(base.resolve())
+            except ValueError:
+                continue
+            if _borrar_archivo_de_clip(candidato_medio):
+                borrados.append(candidato_medio.name)
+    if c.file_path:
+        derivados.extend(_rutas_subtitulos(c.file_path).values())
+        derivados.append(Path(c.file_path).with_name(Path(c.file_path).stem + ".subtitulado.part.mp4"))
+    for candidato in (c.file_path, c.thumb_path, c.archivo_servidor, *derivados):
+        if not candidato or almacen_r2.es_uri(candidato): continue
+        p = Path(candidato)
+        if _borrar_archivo_de_clip(p): borrados.append(p.name)
+        jpg = p.with_suffix(".jpg")
+        if jpg != p and _borrar_archivo_de_clip(jpg): borrados.append(jpg.name)
+    s.delete(c); s.commit()
+    audit(s, user.email, "eliminar_clip", f"clip {cid}: {', '.join(borrados) or 'sin archivo'}")
+    return {"ok": True, "id": cid, "archivos": borrados}
+
+@app.post("/workers/sessions/{sid}/progreso")
+def progreso_sesion(sid: int, data: ProgresoIn, w=Depends(worker_auth), s=Depends(db)):
+    """El trabajador informa los bytes reales acumulados. Nunca baja el contador."""
+    row = s.get(LiveSession, sid)
+    if not row: raise HTTPException(404, "Sesión no encontrada")
+    n = max(0, int(data.bytes or 0))
+    if n > int(row.bytes_captura or 0):
+        row.bytes_captura = n; s.commit()
+    return {"ok": True, "bytes_captura": int(row.bytes_captura or 0)}
 
 # ---------- Copia del clip en el servidor (ver/descargar desde el panel) ----------
 # Los clips se generan en la PC del trabajador; para VERLOS y DESCARGARLOS
@@ -903,8 +1492,42 @@ async def subir_archivo_clip(cid: int, request: Request, w=Depends(worker_auth),
                 raise HTTPException(413, f"El clip supera el límite de copia en el servidor ({CLIP_MAX_BYTES // (1024 * 1024)} MB)")
         except ValueError:
             pass
-    dest = CLIPS_DIR / f"clip_{cid}.mp4"
-    parcial = CLIPS_DIR / f"clip_{cid}.mp4.part"
+    almacen = almacen_r2.desde_entorno()
+    if almacen is not None:
+        import tempfile
+        uid, sid = _ids_almacen(s, c)
+        clave = almacen_r2.clave_copia(uid, sid, cid, "original")
+        if almacen.existe(clave):
+            raise HTTPException(409, "Ya existe la copia de este clip y no se reemplazó.")
+        parcial_tmp = tempfile.NamedTemporaryFile(prefix=f"clip_{cid}_", suffix=".part", delete=False)
+        size = 0
+        try:
+            with parcial_tmp as out:
+                async for chunk in request.stream():
+                    if not chunk: continue
+                    size += len(chunk)
+                    if size > CLIP_MAX_BYTES:
+                        raise HTTPException(413, f"El clip supera el límite de copia en el servidor ({CLIP_MAX_BYTES // (1024 * 1024)} MB)")
+                    out.write(chunk)
+            if size == 0:
+                raise HTTPException(400, "La subida llegó vacía: no se guardó ninguna copia")
+            with open(parcial_tmp.name, "rb") as origen:
+                datos = origen.read()
+            resp = almacen.put(clave, datos, "video/mp4")
+            codigo = resp.status_code
+            resp.close()
+            if codigo not in (200, 201):
+                raise HTTPException(502, "No se pudo guardar la copia del clip en R2.")
+        except HTTPException:
+            raise
+        finally:
+            Path(parcial_tmp.name).unlink(missing_ok=True)
+        c.archivo_servidor = almacen.uri(clave); s.commit()
+        audit(s, f"trabajador:{w.name}", "subir_copia_clip", f"clip {cid}: {size} bytes en r2")
+        return {"ok": True, "clip_id": cid, "bytes": size, "archivo_servidor": clave, "destino": "r2"}
+    base_copia = directorio_medios() or CLIPS_DIR
+    dest = base_copia / f"clip_{cid}.mp4"
+    parcial = base_copia / f"clip_{cid}.mp4.part"
     size = 0
     try:
         with open(parcial, "wb") as out:
@@ -925,19 +1548,27 @@ async def subir_archivo_clip(cid: int, request: Request, w=Depends(worker_auth),
     audit(s, f"trabajador:{w.name}", "subir_copia_clip", f"clip {cid}: {size} bytes")
     return {"ok": True, "clip_id": cid, "bytes": size, "archivo_servidor": dest.name}
 @app.get("/clips/{cid}/archivo")
-def obtener_archivo_clip(cid: int, descargar: int = 0, user=Depends(current_user), s=Depends(db)):
+def obtener_archivo_clip(cid: int, request: Request, descargar: int = 0, user=Depends(current_user), s=Depends(db)):
     """Sirve la copia del clip al USUARIO del panel. Sin «descargar», se
     sirve en línea (FileResponse soporta Range: el reproductor puede buscar).
     Con ?descargar=1, Content-Disposition attachment con el nombre original."""
     c = s.get(Clip, cid)
     if not c: raise HTTPException(404, "Clip no encontrado")
+    if not _clip_autorizado(s, c, user): raise HTTPException(403, "No puedes abrir un clip de otra cuenta.")
     if not _tiene_copia(c):
         raise HTTPException(404, "Este clip todavía no tiene copia en el servidor: se genera en tu PC. "
                                  "Pide la subida con el botón VER o DESCARGAR y espera a que tu PC la suba.")
+    if almacen_r2.es_uri(c.archivo_servidor):
+        respuesta = _respuesta_r2(c, bool(descargar), request.headers.get("range"))
+        s.close()
+        return respuesta
     if descargar:
         nombre = Path(c.file_path).name if c.file_path else f"clip-{cid}.mp4"
-        return FileResponse(c.archivo_servidor, media_type="video/mp4", filename=nombre)
-    return FileResponse(c.archivo_servidor, media_type="video/mp4")
+        respuesta = FileResponse(c.archivo_servidor, media_type="video/mp4", filename=nombre)
+    else:
+        respuesta = FileResponse(c.archivo_servidor, media_type="video/mp4")
+    s.close()
+    return respuesta
 @app.post("/clips/{cid}/solicitar-subida")
 def solicitar_subida_clip(cid: int, user=Depends(current_user), s=Depends(db)):
     """El panel pide la copia: si ya existe, lo dice; si no, encola UN job
@@ -1049,7 +1680,7 @@ def import_video(file: UploadFile = File(...), user=Depends(current_user), s=Dep
     p = Project(name=file.filename, file_path=str(dest), duration_s=dur); s.add(p); s.commit()
     audit(s, user.email, "importar_video", file.filename)
     return {"id": p.id, "name": p.name, "duration_s": dur, "file_path": str(dest)}
-def user_or_worker(authorization: str = Header(default=""), x_worker_token: str = Header(default=""), s=Depends(db)):
+def user_or_worker(request: Request, authorization: str = Header(default=""), x_worker_token: str = Header(default=""), s=Depends(db)):
     """Autoriza al usuario del panel (Bearer) O a un trabajador (X-Worker-Token).
     Se intenta primero el token de trabajador; si no valida, se intenta el usuario.
     Si ninguno valida, current_user/worker_auth lanzan 401."""
@@ -1058,7 +1689,7 @@ def user_or_worker(authorization: str = Header(default=""), x_worker_token: str 
             return {"tipo": "trabajador", "worker": worker_auth(x_worker_token=x_worker_token, s=s)}
         except HTTPException:
             pass
-    return {"tipo": "usuario", "user": current_user(authorization=authorization, s=s)}
+    return {"tipo": "usuario", "user": current_user(request, authorization=authorization, s=s)}
 @app.get("/projects")
 def list_projects(limit: int = 200, offset: int = 0, user=Depends(current_user), s=Depends(db)):
     q = s.query(Project).offset(_clamp_offset(offset)).limit(_clamp_limit(limit))

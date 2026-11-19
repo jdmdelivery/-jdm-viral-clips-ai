@@ -130,7 +130,7 @@ def _crear_sesion_grabando(h, wh, titulo="Flujo LIVE"):
         f"Tras POST start la sesión debe quedar «iniciando», no «{ses['status']}»")
     job = _reclamar(wh, job_id)
     assert job["type"] == "iniciar_grabacion"
-    _completar(wh, job["id"], {"estado": "grabando"})
+    _completar(wh, job["id"], {"estado": "grabando", "bytes": 120000, "tiene_video": True, "tiene_audio": True})
     ses = _sesion_estado(h, sid)
     assert ses["status"] == "grabando", (
         f"Tras completar iniciar_grabacion debe quedar «grabando», no «{ses['status']}»")

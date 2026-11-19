@@ -1,9 +1,11 @@
 // JDM VIRAL CLIPS AI — panel. Todo sale de la API; estados vacíos honestos.
 const SECCIONES = [["inicio","🏠 Inicio"],["centro","🔴 Centro LIVE"],["radar","📡 LIVE VIRAL RADAR"],["proyecto","🆕 Nuevo proyecto"],["importar","📥 Importar videos"],["analizar","🤖 Analizar con IA"],["clips","🎬 Clips generados"],["editor","✂️ Editor"],["redes","🌐 Mis redes sociales"],["publicar","📤 Publicar clips"],["calendario","📅 Calendario"],["historial","🕘 Historial"],["stats","📊 Estadísticas"],["config","⚙️ Configuración"],["admin","🛠 Administración"]];
 let token = localStorage.getItem("jdm_token") || "";
+let sesionElegida = localStorage.getItem("jdm_sesion") || "";
 let motorConectado = null, ultimoEstadoMotor = null; // null = aún sin comprobar
-let ivMotor = null, ivEventos = null;                 // intervalos de auto-refresco por sección
+let ivMotor = null, ivEventos = null, ivClips = null; // intervalos de auto-refresco por sección
 let ivGrab = null, ivContador = null, grabEnCurso = null; // seguimiento de grabación
+let clipAEliminar = null;
 const $ = id => document.getElementById(id);
 function setLiveMsg(txt, info = false) { const el = $("live-msg"); if (!el) return; el.textContent = txt; el.classList.toggle("info", !!info); }
 function setEvMsg(txt, info = false) { const el = $("ev-msg"); if (!el) return; el.textContent = txt; el.classList.toggle("info", !!info); }
@@ -17,6 +19,23 @@ function parseFechaAPI(s) {
 }
 const fmtMS = s => { s = Math.max(0, Math.floor(Number(s) || 0)); return String(Math.floor(s / 60)).padStart(2, "0") + ":" + String(s % 60).padStart(2, "0"); };
 const fmtHMS = s => { s = Math.max(0, Math.floor(s)); return [Math.floor(s / 3600), Math.floor(s % 3600 / 60), s % 60].map(n => String(n).padStart(2, "0")).join(":"); };
+const fmtMB = n => { n = Number(n) || 0; if (n < 1024) return n + " B"; if (n < 1048576) return Math.round(n / 1024) + " KB"; return (n / 1048576).toFixed(1) + " MB"; };
+function guardarToken(t) {
+  token = t || "";
+  if (token) {
+    localStorage.setItem("jdm_token", token);
+    document.cookie = "jdm_token=" + encodeURIComponent(token) + "; Path=/; SameSite=Lax";
+  } else {
+    localStorage.removeItem("jdm_token");
+    document.cookie = "jdm_token=; Path=/; Max-Age=0; SameSite=Lax";
+  }
+}
+if (token) guardarToken(token);
+function recordarSesion(id) {
+  sesionElegida = id ? String(id) : "";
+  if (sesionElegida) localStorage.setItem("jdm_sesion", sesionElegida);
+  else localStorage.removeItem("jdm_sesion");
+}
 async function api(metodo, ruta, body) {
   const r = await fetch(ruta, {method: metodo, headers: {"Content-Type": "application/json", "Authorization": "Bearer " + token}, body: body ? JSON.stringify(body) : undefined});
   const d = await r.json().catch(() => ({}));
@@ -35,8 +54,10 @@ function ir(sec) {
   // Auto-refresco por sección (sin recargar la página): chip de motor en «centro», eventos en «radar».
   if (ivMotor && sec !== "centro") { clearInterval(ivMotor); ivMotor = null; }
   if (ivEventos && sec !== "radar") { clearInterval(ivEventos); ivEventos = null; }
+  if (ivClips && sec !== "clips") { clearInterval(ivClips); ivClips = null; }
   if (sec === "centro" && !ivMotor) ivMotor = setInterval(cargarMotor, 15000);
   if (sec === "radar" && !ivEventos) ivEventos = setInterval(cargarEventos, 15000);
+  if (sec === "clips" && !ivClips) ivClips = setInterval(cargarClips, 20000);
   ({inicio: cargarStats, stats: cargarStats, radar: cargarEventos, analizar: cargarAnalizar, clips: cargarClips,
     editor: cargarEditor, redes: cargarRedes, publicar: () => {cargarClipSelects(); cargarPubs();},
     calendario: cargarCalendario, historial: cargarHistorial, config: cargarConfig, admin: cargarWorkers,
@@ -44,7 +65,7 @@ function ir(sec) {
 }
 async function entrar() {
   try { const d = await api("POST", "/auth/login", {email: $("li-email").value, password: $("li-pass").value});
-    token = d.token; localStorage.setItem("jdm_token", token); mostrarApp(d.email);
+    token = d.token; guardarToken(token); mostrarApp(d.email);
   } catch (e) { $("li-msg").textContent = e.message; }
 }
 async function registrarse() {
@@ -63,7 +84,7 @@ document.addEventListener("keydown", e => {
     e.preventDefault(); ir(e.target.dataset.nav);
   }
 });
-function salir() { localStorage.removeItem("jdm_token"); location.reload(); }
+function salir() { guardarToken(""); location.reload(); }
 function mostrarApp(email) {
   $("login").classList.add("oculto"); $("app").classList.remove("oculto"); $("usr").textContent = email || "";
   $("menu").innerHTML = SECCIONES.map(([k, v]) => `<button data-sec="${k}" onclick="ir('${k}')">${v}</button>`).join("");
@@ -119,24 +140,43 @@ async function contarMomentos(sid) {
 }
 function pintarBtnRadar(ses, nMomentos) {
   const btn = $("btn-radar"); if (!btn) return;
-  const activo = !!(ses && ses.radar_activo);
   const cuenta = (nMomentos === null || nMomentos === undefined) ? "" : ` — ${nMomentos} momentos`;
-  btn.innerHTML = (activo ? "📡 RADAR ACTIVADO — DESACTIVAR" : "📡 ACTIVAR RADAR VIRAL") + ` <span id="radar-count">${esc(cuenta)}</span>`;
+  let etiqueta = "📡 ACTIVAR RADAR VIRAL";
+  if (ses && ses.radar_activo) etiqueta = ses.radar_sin_fuente ? "📡 RADAR SIN FUENTE" : "📡 RADAR ANALIZANDO — DESACTIVAR";
+  btn.innerHTML = etiqueta + ` <span id="radar-count">${esc(cuenta)}</span>`;
 }
 async function refrescarRadarUI(ses) {
   const sid = ses ? ses.id : sesionId();
   pintarBtnRadar(ses, await contarMomentos(sid));
 }
 // Distintivo + contador de grabación en vivo (desde started_at confirmado por la API).
-function arrancarContador(startedAt) {
+function arrancarContador(startedAt, etiqueta) {
   if (ivContador) clearInterval(ivContador);
   const t0 = parseFechaAPI(startedAt); const base = t0 ? t0.getTime() : Date.now();
-  const tick = () => { const el = $("live-estado"); if (el) el.textContent = "🔴 GRABANDO EN VIVO — " + fmtHMS((Date.now() - base) / 1000); };
+  const tick = () => { const el = $("live-estado"); if (el) { const baseTxt = etiqueta === "GRABANDO" ? "GRABANDO EN VIVO" : etiqueta; el.textContent = textoConBytes(baseTxt + " — " + fmtHMS((Date.now() - base) / 1000), el); } };
   tick(); ivContador = setInterval(tick, 1000);
 }
-function mostrarGrabando(ses) {
+function textoConBytes(base, el) {
+  const n = Number(el && el.dataset.bytes || 0);
+  return n > 0 ? base + " · " + fmtMB(n) : base;
+}
+function pintarEstadoReal(ses) {
   const el = $("live-estado"); if (!el) return;
-  el.classList.remove("oculto"); el.classList.add("grabando"); arrancarContador(ses && ses.started_at);
+  if (!ses || !ses.estado_real) { el.classList.add("oculto"); el.classList.remove("grabando", "estado-error"); el.textContent = ""; return; }
+  el.classList.remove("oculto");
+  el.dataset.bytes = String(ses.bytes_captura || 0);
+  const vivo = ses.estado_real === "GRABANDO" || ses.estado_real === "RADAR ANALIZANDO" || ses.estado_real === "CAPTURANDO VIDEO";
+  el.classList.toggle("grabando", vivo);
+  el.classList.toggle("estado-error", ses.estado_real === "ERROR DE FUENTE");
+  if (vivo && ses.started_at) arrancarContador(ses.started_at, ses.estado_real);
+  else {
+    if (ivContador) { clearInterval(ivContador); ivContador = null; }
+    el.textContent = textoConBytes(ses.estado_real + (ses.error_fuente ? " — " + ses.error_fuente : ""), el);
+  }
+  if (ses.estado_real === "ERROR DE FUENTE") setLiveMsg(ses.estado_real + (ses.error_fuente ? ": " + ses.error_fuente : ""));
+}
+function mostrarGrabando(ses) {
+  pintarEstadoReal(ses);
 }
 function ocultarGrabando() {
   const el = $("live-estado"); if (el) { el.classList.add("oculto"); el.classList.remove("grabando"); el.textContent = ""; }
@@ -164,10 +204,12 @@ function seguirEstadoGrabacion(sid, jobId, modo) {
           if (g.modo === "detencion") setLiveMsg("Grabación detenida. Los segmentos ya guardados no se pierden.");
           cargarSesiones(); return;
         }
-        if (ses.status === "error") {
-          let detalle = "";
+        if (ses.estado_real) pintarEstadoReal(ses);
+        if (ses.status === "error" || ses.estado_real === "ERROR DE FUENTE") {
+          let detalle = ses.error_fuente || "";
           if (g.jobId) { try { const js = await api("GET", "/jobs?limit=50"); const j = (js || []).find(x => x.id == g.jobId); if (j && j.error) detalle = j.error; } catch (e) {} }
-          ocultarGrabando(); pararSeguimientoGrab();
+          pararSeguimientoGrab();
+          pintarEstadoReal(ses);
           setLiveMsg("El trabajador no pudo " + (g.modo === "detencion" ? "detener" : "iniciar") + " la grabación" + (detalle ? ": " + detalle : ". Revisa «Trabajos».")); return;
         }
         // iniciando / deteniendo: si el job ya falló, se muestra su error aunque la sesión aún no pase a error.
@@ -195,27 +237,38 @@ function restaurarEstadoGrabacion(ses) {
   if (!ses) { ocultarGrabando(); pararSeguimientoGrab(); return; }
   const yaSigue = grabEnCurso && grabEnCurso.sid === String(ses.id);
   if (ses.status === "grabando") { mostrarGrabando(ses); if (!yaSigue) seguirEstadoGrabacion(ses.id, null, "vigilancia"); }
-  else if (ses.status === "iniciando") { ocultarGrabando(); if (!yaSigue) seguirEstadoGrabacion(ses.id, null, "inicio"); }
-  else if (ses.status === "deteniendo") { if (!yaSigue) seguirEstadoGrabacion(ses.id, null, "detencion"); }
-  else { ocultarGrabando(); pararSeguimientoGrab(); }
+  else if (ses.status === "iniciando") { pintarEstadoReal(ses); if (!yaSigue) seguirEstadoGrabacion(ses.id, null, "inicio"); }
+  else if (ses.status === "deteniendo") { pintarEstadoReal(ses); if (!yaSigue) seguirEstadoGrabacion(ses.id, null, "detencion"); }
+  else { pararSeguimientoGrab(); pintarEstadoReal(ses); }
 }
 async function cargarSesiones() {
   const previa = $("ss-lista") ? $("ss-lista").value : "";
   cargarMotor();
   try { const ss = await api("GET", "/sessions");
     $("ss-lista").innerHTML = ss.map(s => `<option value="${s.id}">#${s.id} ${esc(s.title)} — ${esc(s.status)}${s.radar_activo ? " · 📡 radar" : ""}</option>`).join("") || "<option value=''>Sin sesiones</option>";
-    if (previa && ss.some(s => String(s.id) === String(previa))) $("ss-lista").value = previa;
+    if (sesionElegida && ss.some(s => String(s.id) === String(sesionElegida))) $("ss-lista").value = String(sesionElegida);
+    else if (previa && ss.some(s => String(s.id) === String(previa))) $("ss-lista").value = previa;
+    else if (!sesionElegida) {
+      const activa = ss.find(s => s.status === "grabando") || ss.find(s => s.status === "iniciando");
+      if (activa) $("ss-lista").value = String(activa.id);
+    }
     const tablaSes = $("ss-tabla");
-    if (tablaSes) tablaSes.innerHTML = tabla(ss, [["Sesión", r => "#" + r.id + " " + esc(r.title)], ["Estado", r => esc(r.status)], ["Radar", r => r.radar_activo ? "📡 activo" : "—"]]);
+    if (tablaSes) tablaSes.innerHTML = tabla(ss, [["Sesión", r => "#" + r.id + " " + esc(r.title)], ["Estado", r => esc(r.estado_real || r.status)], ["Radar", r => r.radar_sin_fuente ? "📡 sin fuente" : (r.radar_activo ? "📡 analizando" : "—")]]);
     const sel = ss.find(s => String(s.id) === String(sesionId())) || null;
     restaurarEstadoGrabacion(sel);
     await refrescarRadarUI(sel);
     cargarClipsSesion();
   } catch (e) {}
 }
-function sesionId() { const el = $("ss-lista"); return el ? el.value : ""; }
+function sesionId() {
+  const el = $("ss-lista");
+  if (sesionElegida && el && [...el.options].some(o => o.value === String(sesionElegida))) return String(sesionElegida);
+  return el && el.value ? el.value : "";
+}
 // Al cambiar la selección: restaura grabación/radar, momentos y clips de esa sesión.
 async function cargarSesion() {
+  const elegida = $("ss-lista") && $("ss-lista").value;
+  if (elegida) recordarSesion(elegida);
   const sid = sesionId(); if (!sid) { ocultarGrabando(); pararSeguimientoGrab(); pintarBtnRadar(null, null); cargarClipsSesion(); return; }
   try { const ss = await api("GET", "/sessions");
     const sel = (ss || []).find(s => String(s.id) === String(sid)) || null;
@@ -279,10 +332,13 @@ async function activarRadar() {
     const nuevo = !(ses && ses.radar_activo);
     const d = await api("POST", `/sessions/${sid}/radar`, {activo: nuevo});
     // La etiqueta sale de la RESPUESTA de la API (d.radar_activo), no del estado local.
-    pintarBtnRadar({radar_activo: d.radar_activo}, await contarMomentos(sid));
-    setLiveMsg(d.radar_activo
-      ? "📡 Radar en vivo ACTIVADO en la sesión #" + sid + (d.job_id ? " (trabajo #" + d.job_id + ")" : "") + ". Mientras grabes, los momentos irán apareciendo en «LIVE VIRAL RADAR» con sus clips."
-      : "Radar en vivo DESACTIVADO en la sesión #" + sid + ".");
+    const fresco = (await api("GET", "/sessions")).find(x => x.id == sid) || {radar_activo: d.radar_activo, radar_sin_fuente: !((ses && ses.status === "grabando"))};
+    pintarBtnRadar(fresco, await contarMomentos(sid));
+    setLiveMsg(fresco.radar_sin_fuente
+      ? "📡 RADAR SIN FUENTE en la sesión #" + sid + ". No hay captura de video, así que no se analizará nada."
+      : (d.radar_activo
+        ? "📡 RADAR ANALIZANDO la captura de la sesión #" + sid + "."
+        : "Radar en vivo DESACTIVADO en la sesión #" + sid + "."), true);
     cargarSesiones();
   } catch (e) { setLiveMsg(e.message); }
 }
@@ -304,9 +360,11 @@ async function cargarClipsSesion() {
       tabla(cs, [["Clip", r => "#" + r.id + " " + esc(r.title || "")], ["Duración", r => (r.duration_s ?? "—") + "s"], ["Score", r => `<span class='score'>${r.score}/100</span>`], ["Archivo/ruta", r => esc(r.file_path || "—")], ["Acciones", r => accionesClip(r, "liveclip")]]);
   } catch (e) { box.innerHTML = `<div class="fila-clips"><h4>Clips de esta sesión</h4><span class="nota">${esc(e.message)}</span></div>`; }
 }
+function largoClip() { const el = $("clip-largo"); return el && el.value ? Number(el.value) : null; }
 async function generarTodosClips() {
   const sid = sesionId(); if (!sid) { setLiveMsg("Crea y selecciona una sesión primero."); return; }
-  try { const d = await api("POST", `/sessions/${sid}/generar-clips`);
+  try { const largo = largoClip(); const q = largo ? `?largo_s=${largo}` : "";
+    const d = await api("POST", `/sessions/${sid}/generar-clips` + q);
     setLiveMsg(`${d.encolados ?? 0} trabajos encolados, ${d.omitidos ?? 0} omitidos (ya tenían clip o trabajo en curso)`);
     [5000, 15000, 30000].forEach(ms => setTimeout(cargarClipsSesion, ms));
   } catch (e) { setLiveMsg(e.message); }
@@ -316,21 +374,22 @@ async function cargarEventos() {
   try { const sel = $("ss-lista"); const sid = sel && sel.value ? sel.value : "";
     const ev = await api("GET", sid ? `/events?session_id=${sid}` : "/events");
     if (!ev.length) { $("eventos").innerHTML = "<p class='nota'>Sin datos todavía.</p>"; }
-    else $("eventos").innerHTML = "<table><tr><th>Tipo</th><th>Inicio–Fin</th><th>Duración</th><th>Motivo</th><th>Puntuación</th><th>Acciones</th></tr>" +
+    else $("eventos").innerHTML = "<table><tr><th>Hora</th><th>Tipo</th><th>Inicio–Fin</th><th>Duración</th><th>Motivo</th><th>Puntuación</th><th>Acciones</th></tr>" +
       ev.map(r => {
-        const bd = r.breakdown && typeof r.breakdown === "object" ? Object.entries(r.breakdown) : [];
-        const motivo = bd.length ? bd.map(([k, v]) => `${esc(k)}: ${esc(typeof v === "object" ? JSON.stringify(v) : v)}`).join(" · ") : esc(r.status || "");
+        const motivo = r.motivo || r.status || "";
+        const hora = r.hora || r.created_at || "";
         const clipTxt = r.tiene_clip
           ? `<span class="nota">${esc(r.clip_file_path || ("Clip #" + (r.clip_id ?? "")))}</span> ` + (r.clip_descargable ? `<button onclick="reproducirEvento(${r.clip_id}, ${r.id})">REPRODUCIR</button>` : "")
           : `<button onclick="generarClipEvento(${r.id})">GENERAR CLIP</button>`;
-        return `<tr><td>${esc(r.type)}</td><td>${fmtMS(r.start_s)}–${fmtMS(r.end_s)}</td><td>${r.duracion_s ?? "—"}s</td><td>${motivo}</td><td><span class='score'>${r.score}/100</span></td>` +
+        return `<tr><td>${esc(String(hora).replace("T", " ").slice(0, 19))}</td><td>${esc(r.type)}</td><td>${fmtMS(r.start_s)}–${fmtMS(r.end_s)}</td><td>${r.duracion_s ?? "—"}s</td><td>${esc(motivo)}</td><td><span class='score'>${r.score}/100</span></td>` +
           `<td>${clipTxt} <button class="sec" onclick="descartarEvento(${r.id})">DESCARTAR</button><div id="ev-video-${r.id}"></div></td></tr>`;
       }).join("") + "</table>";
     if (sid) { const c = $("radar-count"); if (c) c.textContent = ` — ${ev.length} momentos`; }
   } catch (e) { $("eventos").innerHTML = esc(e.message); }
 }
 async function generarClipEvento(id) {
-  try { const d = await api("POST", `/events/${id}/clip`);
+  try { const largo = largoClip(); const q = largo ? `?largo_s=${largo}` : "";
+    const d = await api("POST", `/events/${id}/clip` + q);
     setEvMsg(d.duplicado ? "Ese momento ya tenía un trabajo de clip en curso (trabajo #" + d.job_id + ")." : "Clip encolado (trabajo #" + d.job_id + "). Aparecerá aquí al terminar el trabajador.", true);
   } catch (e) { setEvMsg(e.message); } // incluye el 409 si ya tiene clip
 }
@@ -377,6 +436,61 @@ async function analizar(pid) {
 // Clips / editor / publicar
 let clipsCache = [];
 let subidasEnCurso = {}; // clipId -> seguimiento del poll de «subir_clip»
+let subsOn = {};
+try { subsOn = JSON.parse(localStorage.getItem("jdm_subs_on") || "{}") || {}; } catch (e) { subsOn = {}; }
+function subsActivos(c) {
+  if (!c) return false;
+  const id = String(c.id);
+  if (Object.prototype.hasOwnProperty.call(subsOn, id)) return !!subsOn[id];
+  return !!c.tiene_subtitulado;
+}
+function alternarSubtitulos(id) {
+  const c = clipsCache.find(x => x.id == id);
+  const on = !subsActivos(c || {id: id, tiene_subtitulado: false});
+  subsOn[String(id)] = on;
+  localStorage.setItem("jdm_subs_on", JSON.stringify(subsOn));
+  const btn = document.querySelector('button.subs-toggle[onclick="alternarSubtitulos(' + id + ')"]');
+  if (btn) {
+    btn.textContent = "SUBTÍTULOS " + (on ? "ON" : "OFF");
+    btn.classList.toggle("subs-on", on);
+    btn.classList.toggle("sec", !on);
+  }
+  cargarClips();
+}
+function notaSubtitulos(c) {
+  const estado = c.subtitulo_estado || "";
+  if (estado === "error" || estado === "sin_habla") {
+    return c.subtitulo_error || "No se pudieron generar los subtítulos. El clip original sigue disponible.";
+  }
+  if (estado === "procesando" || estado === "corrigiendo" || estado === "corregir" || estado === "pendiente") {
+    return "Preparando subtítulos… el clip original sigue disponible.";
+  }
+  if (c.tiene_subtitulado) return "Subtítulos listos. ON los muestra sobre el video; OFF reproduce el original.";
+  return "Subtítulos en espera. El original sigue disponible.";
+}
+function descargarSubtitulado(id) {
+  fetch(`/clips/${id}/subtitulado?descargar=1`, {headers: {"Authorization": "Bearer " + token}}).then(async r => {
+    if (!r.ok) {
+      const d = await r.json().catch(() => ({}));
+      if ($("clips-msg")) $("clips-msg").textContent = d.detail || "El video con subtítulos todavía no está listo.";
+      return;
+    }
+    const b = await r.blob();
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(b);
+    a.download = "clip-" + id + "-subtitulado.mp4";
+    a.click();
+  }).catch(e => { if ($("clips-msg")) $("clips-msg").textContent = "No se pudo descargar el video con subtítulos: " + e.message; });
+}
+async function guardarTextoSubtitulos(id) {
+  const ta = document.getElementById("subs-texto-" + id);
+  if (!ta) return;
+  try {
+    const d = await api("PUT", `/clips/${id}/subtitulos`, {texto: ta.value});
+    if ($("clips-msg")) $("clips-msg").textContent = d.nota || "Texto guardado.";
+    await cargarClips();
+  } catch (e) { if ($("clips-msg")) $("clips-msg").textContent = e.message; }
+}
 // Acciones de un clip (VER / DESCARGAR) compartidas por «Clips generados»
 // (prefijo "clip") y los clips de sesión del Centro LIVE (prefijo
 // "liveclip"): los contenedores de estado/video llevan el prefijo para no
@@ -393,33 +507,40 @@ function accionesClip(r, prefijo) {
     `<span id="${prefijo}-estado-${r.id}" class="nota"></span><div id="${prefijo}-video-${r.id}"></div>`;
 }
 function verClip(id, prefijo) {
-  const box = document.getElementById(prefijo + "-video-" + id); if (!box) return;
-  // El <video> no puede mandar el header Authorization: se baja la copia con
-  // fetch autenticado y se reproduce desde un blob URL (mismo patrón que
-  // reproducirEvento). La API sí soporta Range para clientes directos.
-  fetch(`/clips/${id}/archivo`, {headers: {"Authorization": "Bearer " + token}}).then(async r => {
-    if (!r.ok) { const d = await r.json().catch(() => ({})); $("clips-msg").textContent = d.detail || "Este clip no tiene copia en el servidor todavía."; return; }
-    const b = await r.blob();
-    box.innerHTML = "";
-    const vid = document.createElement("video");
-    vid.controls = true; vid.autoplay = true; vid.src = URL.createObjectURL(b);
-    box.appendChild(vid);
-    const nota = document.createElement("p");
-    nota.className = "nota";
-    nota.textContent = "Estás viendo la copia guardada en el servidor: sirve para ver y descargar, pero el almacenamiento gratuito es temporal. El original siempre queda en tu PC.";
-    box.appendChild(nota);
-  }).catch(e => { $("clips-msg").textContent = "No se pudo cargar el clip: " + e.message; });
+  const c = clipsCache.find(x => x.id == id);
+  abrirReproductor(id, prefijo, subsActivos(c || {id: id}));
 }
 function nombreLocalClip(c) {
   const p = String((c && c.file_path) || "").replace(/\\/g, "/");
   return p.split("/").pop() || ("clip-" + (c ? c.id : "x") + ".mp4");
 }
 function descargarCopia(id) {
+  const c = clipsCache.find(x => x.id == id);
+  fetch(`/clips/${id}/download`, {headers: {"Authorization": "Bearer " + token}}).then(async r => {
+    if (r.status === 404) { descargarArchivoServidor(id); return; }
+    if (!r.ok) {
+      const d = await r.json().catch(() => ({}));
+      if ($("clips-msg")) $("clips-msg").textContent = d.detail || "Este clip no está disponible para descargar.";
+      return;
+    }
+    const b = await r.blob();
+    const disp = r.headers.get("Content-Disposition") || "";
+    const m = /filename="?([^";]+)"?/.exec(disp);
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(b);
+    a.download = (m && m[1]) || nombreLocalClip(c);
+    a.click();
+  }).catch(e => { if ($("clips-msg")) $("clips-msg").textContent = "No se pudo descargar el clip: " + e.message; });
+}
+function descargarArchivoServidor(id) {
   fetch(`/clips/${id}/archivo?descargar=1`, {headers: {"Authorization": "Bearer " + token}}).then(async r => {
-    if (!r.ok) { const d = await r.json().catch(() => ({})); $("clips-msg").textContent = d.detail || "Este clip no tiene copia en el servidor todavía."; return; }
-    const b = await r.blob(); const a = document.createElement("a");
-    a.href = URL.createObjectURL(b); a.download = nombreLocalClip(clipsCache.find(x => x.id == id)); a.click();
-  }).catch(e => { $("clips-msg").textContent = "No se pudo descargar el clip: " + e.message; });
+    if (!r.ok) return;
+    const b = await r.blob();
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(b);
+    a.download = nombreLocalClip(clipsCache.find(x => x.id == id));
+    a.click();
+  }).catch(() => {});
 }
 async function pedirCopia(id, accion, prefijo) {
   const est = document.getElementById(prefijo + "-estado-" + id);
@@ -470,9 +591,92 @@ function seguirSubida(id, accion, jobId, prefijo) {
   reg.iv = setInterval(paso, 3000); paso();
 }
 async function cargarClips() {
-  try { clipsCache = await api("GET", "/clips");
-    $("clips").innerHTML = tabla(clipsCache, [["Clip", r => "#" + r.id + " " + esc(r.title || "")], ["Formato", r => esc(r.format)], ["Duración", r => r.duration_s + "s"], ["Score", r => `<span class='score'>${r.score}/100</span>`], ["Subtítulos", r => r.subtitles ? "Sí" : "No"], ["Archivo", r => r.tiene_copia_servidor ? "Copia en el servidor" : (r.descargable ? "En el servidor" : esc(r.file_path || "—") + " (en tu PC)")], ["Acciones", r => accionesClip(r, "clip")]]);
-  } catch (e) {}
+  try {
+    const ses = await api("GET", "/sessions");
+    const filtro = $("bib-sesion");
+    if (filtro) {
+      const previa = filtro.value;
+      filtro.innerHTML = `<option value="">Todas las sesiones</option>` + ses.map(s => `<option value="${s.id}">#${s.id} ${esc(s.title)}</option>`).join("");
+      if (previa) filtro.value = previa;
+    }
+    const sid = filtro && filtro.value ? filtro.value : "";
+    const fecha = ($("bib-fecha") && $("bib-fecha").value) || "";
+    const orden = ($("bib-orden") && $("bib-orden").value) || "reciente";
+    clipsCache = await api("GET", "/clips?limit=200" + (sid ? `&session_id=${sid}` : ""));
+    let lista = clipsCache.slice();
+    if (fecha) lista = lista.filter(c => String(c.created_at || "").slice(0, 10) === fecha);
+    lista.sort((a, b) => orden === "antiguo" ? a.id - b.id : b.id - a.id);
+    const box = $("clips");
+    if (!box) return;
+    if (!lista.length) { box.innerHTML = "<p class='nota'>Sin clips en esta vista.</p>"; return; }
+    box.innerHTML = lista.map(tarjetaClip).join("");
+  } catch (e) { if ($("clips-msg")) $("clips-msg").textContent = e.message; }
+}
+function tarjetaClip(c) {
+  const cuando = String(c.created_at || "").replace("T", " ").slice(0, 16);
+  const sesion = c.session_id ? ("#" + c.session_id + " " + (c.sesion_titulo || "")) : "Sin sesión";
+  const estado = c.archivo_existe || c.descargable ? (c.status || "listo") : "archivo no encontrado";
+  const thumb = c.tiene_miniatura ? `<img src="/clips/${c.id}/miniatura" alt="" class="bib-thumb" loading="lazy">` : `<div class="bib-thumb bib-sin">Sin miniatura</div>`;
+  return `<article class="bib-card">
+    ${thumb}
+    <div class="bib-cuerpo">
+      <b>${esc(c.title || ("Clip #" + c.id))}</b>
+      <span class="nota">${esc(sesion)}</span>
+      <span class="nota">${esc(cuando)} · ${c.duration_s ?? "—"} s · <span class="score">${c.score}/100</span></span>
+      <span class="nota">${esc(estado)}</span>
+      <span class="nota">${esc(notaSubtitulos(c))}</span>
+      <div class="bib-acciones">
+        <button type="button" class="${subsActivos(c) ? "subs-on" : "sec"} subs-toggle" onclick="alternarSubtitulos(${c.id})">SUBTÍTULOS ${subsActivos(c) ? "ON" : "OFF"}</button>
+        <button type="button" onclick="verClip(${c.id}, 'clip')">▶ VER CLIP</button>
+        <button type="button" class="sec" onclick="descargarCopia(${c.id})">DESCARGAR CLIP</button>
+        <button type="button" class="sec" onclick="descargarSubtitulado(${c.id})">DESCARGAR CON SUBTÍTULOS</button>
+        <button type="button" class="sec" onclick="pedirEliminarClip(${c.id})">ELIMINAR CLIP</button>
+      </div>
+      <label class="subs-correccion">Corregir texto
+        <textarea id="subs-texto-${c.id}" maxlength="4000">${esc(c.subtitulo_texto || "")}</textarea>
+      </label>
+      <button type="button" class="sec" onclick="guardarTextoSubtitulos(${c.id})">GUARDAR TEXTO</button>
+    </div>
+  </article>`;
+}
+function abrirReproductor(id, prefijo, conSubtitulos) {
+  const c = clipsCache.find(x => x.id == id);
+  const caja = $("reproductor"); const vid = $("reproductor-video");
+  if (!caja || !vid) return;
+  const usar = !!conSubtitulos && c && c.tiene_subtitulado;
+  if ($("reproductor-titulo")) $("reproductor-titulo").textContent = (c && c.title) || ("Clip #" + id);
+  if ($("reproductor-nota")) $("reproductor-nota").textContent = usar
+    ? "Reproduciendo con subtítulos. El original siempre queda en tu PC."
+    : "El original siempre queda en tu PC.";
+  vid.src = usar ? ("/clips/" + id + "/subtitulado") : ("/clips/" + id + "/media");
+  caja.classList.remove("oculto");
+  vid.play().catch(() => {});
+}
+function cerrarReproductor() {
+  const vid = $("reproductor-video"); const caja = $("reproductor");
+  if (vid) { vid.pause(); vid.removeAttribute("src"); vid.load(); }
+  if (caja) caja.classList.add("oculto");
+}
+function pedirEliminarClip(id) {
+  clipAEliminar = id;
+  const c = clipsCache.find(x => x.id == id);
+  if ($("confirmar-nombre")) $("confirmar-nombre").textContent = (c && c.title) || ("Clip #" + id);
+  const caja = $("confirmar-borrar"); if (caja) caja.classList.remove("oculto");
+}
+function cancelarBorrarClip() {
+  clipAEliminar = null;
+  const caja = $("confirmar-borrar"); if (caja) caja.classList.add("oculto");
+}
+async function confirmarBorrarClip() {
+  const id = clipAEliminar;
+  if (!id) return;
+  try {
+    await api("DELETE", `/clips/${id}`);
+    cancelarBorrarClip();
+    if ($("clips-msg")) $("clips-msg").textContent = "Clip #" + id + " eliminado.";
+    await cargarClips();
+    cargarClipsSesion();
+  } catch (e) { if ($("clips-msg")) $("clips-msg").textContent = e.message; }
 }
 async function cargarClipSelects() {
   await cargarClips();

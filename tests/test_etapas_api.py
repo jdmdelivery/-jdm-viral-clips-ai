@@ -305,6 +305,14 @@ def test_guarda_grabacion_unica():
         assert r["allowed"] is True
     assert client.post(f"/sessions/{a}/start", headers=h).status_code == 200
     assert client.post(f"/sessions/{b}/start", headers=h).status_code == 409  # otra ya grabando
-    assert client.post(f"/sessions/{a}/stop", headers=h).status_code == 200  # detener libera la guarda
+    stop = client.post(f"/sessions/{a}/stop", headers=h)
+    assert stop.status_code == 200
+    # Mientras el trabajador no termina de cerrar, la otra sesión no arranca.
+    assert client.post(f"/sessions/{b}/start", headers=h).status_code == 409
+    wh = worker_headers(h)
+    job = claim_hasta(wh, stop.json()["job_id"])
+    done = client.post(f"/jobs/{job['id']}/complete", headers=wh, json={"result": {
+        "estado": "detenida", "grabacion_completa": "C:/prueba/grabacion_completa.mp4", "bytes": 8192}})
+    assert done.status_code == 200, done.text
     assert client.post(f"/sessions/{b}/start", headers=h).status_code == 200
     assert client.post(f"/sessions/{b}/stop", headers=h).status_code == 200

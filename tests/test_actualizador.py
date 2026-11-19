@@ -32,7 +32,7 @@ def _servir(directorio):
 def _preparar_remoto(remoto, archivos, hashes_extra=None):
     manifiesto = {"version": "9.9.9", "files": {}}
     for nombre, contenido in archivos.items():
-        (remoto / nombre).write_text(contenido, encoding="utf-8")
+        (remoto / nombre).write_text(contenido, encoding="utf-8", newline="\n")
         manifiesto["files"][nombre] = _sha(contenido)
     if hashes_extra:
         manifiesto["files"].update(hashes_extra)

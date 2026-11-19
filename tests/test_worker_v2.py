@@ -1,6 +1,7 @@
 """Tests Etapa 2/3 del trabajador: dedup, viral v2 con transcripción,
 hash perceptual, rostros/movimiento y editor FFmpeg. Todo con señales reales."""
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -133,8 +134,7 @@ def test_editor_recorte_texto_y_volumen(tmp_path):
                                            "volumen_factor": 0.5})
     assert r["subtitles"] is False  # sin flag jamás quema subtítulos
     assert 2.5 <= r["duration_s"] <= 3.5
-    assert r["thumb_path"] and subprocess.run(
-        ["test", "-f", r["thumb_path"]]).returncode == 0
+    assert r["thumb_path"] and Path(r["thumb_path"]).is_file()
 
 
 def test_editor_subtitulos_solo_con_flag_y_texto(tmp_path):

@@ -61,6 +61,16 @@
             <button onclick="abrirLive()">▶ ABRIR LIVE</button>
             <button id="btn-iniciar" class="rojo" onclick="iniciarGrab()">⏺ INICIAR GRABACIÓN</button>
             <button id="btn-radar" onclick="activarRadar()">📡 ACTIVAR RADAR VIRAL <span id="radar-count"></span></button>
+            <label class="nota">Duración del clip
+              <select id="clip-largo">
+                <option value="">Automática</option>
+                <option value="3">3 s</option>
+                <option value="5">5 s</option>
+                <option value="10">10 s</option>
+                <option value="15">15 s</option>
+                <option value="20">20 s</option>
+              </select>
+            </label>
             <button onclick="ir('radar')">🔥 VER MOMENTOS DETECTADOS</button>
             <button class="grad" onclick="ir('analizar')">🎬 GENERAR CLIPS</button>
             <button class="grad" onclick="ir('publicar')">📤 PUBLICAR CLIP</button>
@@ -104,8 +114,14 @@
 
     <section data-sec="clips" class="oculto">
       <h3>Clips generados</h3>
+      <p class="nota">Los clips del radar aparecen aquí. Se ven, se descargan y se eliminan en esta pantalla, sin abrir carpetas. SUBTÍTULOS ON muestra el video con texto; OFF reproduce el original. El MP4 original no se reemplaza.</p>
+      <div class="biblioteca-filtros">
+        <select id="bib-sesion" onchange="cargarClips()"><option value="">Todas las sesiones</option></select>
+        <input id="bib-fecha" type="date" onchange="cargarClips()">
+        <select id="bib-orden" onchange="cargarClips()"><option value="reciente">Más reciente</option><option value="antiguo">Más antiguo</option></select>
+      </div>
       <p id="clips-msg" class="msg"></p>
-      <div id="clips"></div>
+      <div id="clips" class="biblioteca"></div>
     </section>
 
     <section data-sec="editor" class="oculto">
@@ -216,6 +232,24 @@
     </section>
   </main>
 </div>
-<script src="/static/app.js"></script>
+<div id="reproductor" class="reproductor oculto">
+  <div class="reproductor-caja">
+    <video id="reproductor-video" controls playsinline></video>
+    <div class="reproductor-bar">
+      <span id="reproductor-titulo"></span>
+      <button type="button" class="sec" onclick="cerrarReproductor()">CERRAR</button>
+    </div>
+    <p id="reproductor-nota" class="nota"></p>
+  </div>
+</div>
+<div id="confirmar-borrar" class="reproductor oculto">
+  <div class="reproductor-caja confirmar">
+    <p>¿Seguro que deseas eliminar este clip?</p>
+    <p id="confirmar-nombre" class="nota"></p>
+    <button type="button" class="sec" onclick="cancelarBorrarClip()">CANCELAR</button>
+    <button type="button" class="rojo" onclick="confirmarBorrarClip()">ELIMINAR</button>
+  </div>
+</div>
+<script src="/static/app.js?v=subtitulos2"></script>
 </body>
 </html>
