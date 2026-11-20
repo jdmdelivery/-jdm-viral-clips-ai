@@ -20,6 +20,7 @@ Devuelve {file_path, duration_s (ffprobe), format, subtitles, thumb_path, nota}.
 """
 import re, subprocess, tempfile
 from pathlib import Path
+from procesos import SIN_VENTANA
 
 from clipper import FORMATOS, miniatura
 
@@ -33,14 +34,14 @@ FUENTES_CANDIDATAS = [
 
 def _duracion(path):
     r = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration",
-                        "-of", "csv=p=0", str(path)], capture_output=True, text=True, timeout=60)
+                        "-of", "csv=p=0", str(path)], capture_output=True, text=True, timeout=60, creationflags=SIN_VENTANA)
     return float(r.stdout.strip())
 
 
 def _dimensiones(path):
     r = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0",
                         "-show_entries", "stream=width,height", "-of", "csv=p=0:s=x",
-                        str(path)], capture_output=True, text=True, timeout=60)
+                        str(path)], capture_output=True, text=True, timeout=60, creationflags=SIN_VENTANA)
     try:
         w, h = r.stdout.strip().split("x")
         return int(w), int(h)
@@ -51,7 +52,7 @@ def _dimensiones(path):
 def _tiene_audio(path):
     r = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "a",
                         "-show_entries", "stream=index", "-of", "csv=p=0",
-                        str(path)], capture_output=True, text=True, timeout=60)
+                        str(path)], capture_output=True, text=True, timeout=60, creationflags=SIN_VENTANA)
     return bool(r.stdout.strip())
 
 
@@ -60,7 +61,7 @@ def _fuente_sistema():
         if Path(f).exists():
             return f
     try:
-        r = subprocess.run(["fc-list", ":style=Bold", "file"], capture_output=True, text=True, timeout=30)
+        r = subprocess.run(["fc-list", ":style=Bold", "file"], capture_output=True, text=True, timeout=30, creationflags=SIN_VENTANA)
         for linea in r.stdout.splitlines():
             p = linea.split(":")[0].strip()
             if p.endswith(".ttf"):
@@ -236,7 +237,7 @@ def aplicar_edicion(fuente, salida, params=None):
             cmd += ["-map", "0:a:0?"]
         cmd += ["-c:a", "aac", "-ar", "48000"]
     cmd += ["-c:v", "libx264", "-preset", "veryfast", "-shortest", str(salida)]
-    r = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
+    r = subprocess.run(cmd, capture_output=True, text=True, timeout=3600, creationflags=SIN_VENTANA)
     if r.returncode != 0 or not salida.exists():
         raise RuntimeError(f"FFmpeg editando falló: {r.stderr[-800:]}")
 

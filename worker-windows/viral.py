@@ -14,12 +14,13 @@ total con tests/test_viral.py). Con transcripción se calcula un componente
 donde total_base es la puntuación v1 (con la ponderación del modo). La
 fórmula queda escrita en el desglose siempre que hay transcripción."""
 import subprocess, re, unicodedata
+from procesos import SIN_VENTANA
 
 def medir_audio(path):
     """Devuelve (rms_medio_db, rms_pico_db) con FFmpeg astats. (None,None) si falla/sin audio."""
     try:
         r = subprocess.run(["ffmpeg", "-i", str(path), "-af", "astats=metadata=1:reset=0", "-f", "null", "-"],
-                           capture_output=True, text=True, timeout=300)
+                           capture_output=True, text=True, timeout=300, creationflags=SIN_VENTANA)
         txt = r.stderr
         rms_levels = [float(x) for x in re.findall(r"RMS level dB:\s*(-?[\d.]+|-inf)", txt) if x != "-inf"]
         peaks = [float(x) for x in re.findall(r"Peak level dB:\s*(-?[\d.]+|-inf)", txt) if x != "-inf"]

@@ -12,6 +12,7 @@ privado/no disponible o la plataforma no entrega la señal, se lanza
 ErrorResolucion con el motivo en español y el trabajo falla con ese
 mensaje. NUNCA se finge una grabación que no existe."""
 import subprocess, sys
+from procesos import SIN_VENTANA
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -53,7 +54,7 @@ def _ejecutar_ytdlp(url):
     try:
         r = subprocess.run([sys.executable, "-m", "yt_dlp", "-g", "--no-warnings",
                             "-f", "best/bv*+ba", str(url)],
-                           capture_output=True, text=True, timeout=180)
+                           capture_output=True, text=True, timeout=180, creationflags=SIN_VENTANA)
         return r.returncode, r.stdout or "", r.stderr or ""
     except subprocess.TimeoutExpired:
         raise ErrorResolucion("La plataforma tardó demasiado en entregar la señal "

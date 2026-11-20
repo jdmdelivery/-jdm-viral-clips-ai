@@ -2,6 +2,7 @@
 protege segmentos del evento en el buffer -> genera clip con contexto SIN detener nada más."""
 import subprocess, time
 from pathlib import Path
+from procesos import SIN_VENTANA
 import viral, vision, dedup
 from buffer import BufferCircular
 from recorder import segmentar_archivo
@@ -11,7 +12,7 @@ from transcribe import transcribir
 
 def duracion(path):
     r = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration",
-                        "-of", "csv=p=0", str(path)], capture_output=True, text=True, timeout=60)
+                        "-of", "csv=p=0", str(path)], capture_output=True, text=True, timeout=60, creationflags=SIN_VENTANA)
     return float(r.stdout.strip())
 
 def analizar_video(fuente, outdir, modo="general", pre_s=20, post_s=15,

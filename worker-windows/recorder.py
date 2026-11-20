@@ -3,6 +3,7 @@ separado: NUNCA se detiene porque la IA esté procesando un clip.
 Incluye reconexión con reintentos y unión de segmentos al finalizar."""
 import json, os, subprocess, threading, time
 from pathlib import Path
+from procesos import SIN_VENTANA
 from buffer import BufferCircular
 
 SEG = 10
@@ -11,7 +12,7 @@ def duracion_real(path):
     """Duración real de un segmento cerrado (el muxer corta en keyframes: no asumir 10 s exactos)."""
     try:
         r = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration",
-                            "-of", "csv=p=0", str(path)], capture_output=True, text=True, timeout=30)
+                            "-of", "csv=p=0", str(path)], capture_output=True, text=True, timeout=30, creationflags=SIN_VENTANA)
         return float(r.stdout.strip())
     except Exception:
         return float(SEG)
@@ -101,7 +102,7 @@ class Recorder:
         while not self.detener_flag.is_set():
             log = open(self.outdir / "ffmpeg.log", "ab")
             self.proc = subprocess.Popen(_cmd_grabar(self.fuente, self.outdir, start_number, self.en_vivo),
-                                         stdout=subprocess.DEVNULL, stderr=log)
+                                         stdout=subprocess.DEVNULL, stderr=log, creationflags=SIN_VENTANA)
             self._log_fh = log
             while self.proc.poll() is None and not self.detener_flag.is_set():
                 time.sleep(0.5)
@@ -126,7 +127,7 @@ class Recorder:
         try:
             r = subprocess.run(["ffprobe", "-v", "error", "-select_streams", selector,
                                 "-show_entries", "stream=codec_type", "-of", "csv=p=0", str(path)],
-                               capture_output=True, text=True, timeout=15)
+                               capture_output=True, text=True, timeout=15, creationflags=SIN_VENTANA)
             return r.returncode == 0 and selector[0] in (r.stdout or "")
         except Exception:
             return False
@@ -213,7 +214,7 @@ class Recorder:
         try:
             r = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0",
                                 "-show_entries", "stream=codec_type", "-of", "csv=p=0", str(path)],
-                               capture_output=True, text=True, timeout=20)
+                               capture_output=True, text=True, timeout=20, creationflags=SIN_VENTANA)
             return r.returncode == 0 and "video" in (r.stdout or "")
         except Exception:
             return False
@@ -235,7 +236,7 @@ class Recorder:
         parcial = self.outdir / (Path(salida).stem + ".parcial.mp4")
         r = subprocess.run(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(lista),
                             "-c", "copy", "-f", "mp4", str(parcial)],
-                           capture_output=True, text=True, timeout=3600, cwd=str(self.outdir))
+                           capture_output=True, text=True, timeout=3600, cwd=str(self.outdir), creationflags=SIN_VENTANA)
         if r.returncode != 0 or not self._film_valida(parcial):
             try: parcial.unlink(missing_ok=True)
             except OSError: pass
@@ -265,6 +266,6 @@ def segmentar_archivo(fuente, outdir, segment_time=SEG):
                         "-pix_fmt", "yuv420p", "-sc_threshold", "0", "-force_key_frames", f"expr:gte(t,n_forced*{segment_time})",
                         "-c:a", "aac", "-ar", "48000",
                         "-f", "segment", "-segment_time", str(segment_time), "-reset_timestamps", "1",
-                        str(outdir / "seg_%05d.mp4")], capture_output=True, text=True, timeout=7200)
+                        str(outdir / "seg_%05d.mp4")], capture_output=True, text=True, timeout=7200, creationflags=SIN_VENTANA)
     if r.returncode != 0: raise RuntimeError(f"FFmpeg segmentando falló: {r.stderr[-500:]}")
     return sorted(outdir.glob("seg_*.mp4"))

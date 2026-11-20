@@ -195,6 +195,15 @@ function seguirEstadoGrabacion(sid, jobId, modo) {
       if (ses) {
         if (ses.status === "grabando") {
           mostrarGrabando(ses);
+          // La etiqueta del botón del radar y su cuenta de momentos se
+          // repintan con el estado FRESCO en cada paso de seguimiento.
+          // Sin esto, el botón conservaba el texto de antes de grabar
+          // («ACTIVAR RADAR VIRAL») aunque el radar entra SOLO con la
+          // grabación (start lo activa y el trabajador lo arranca): un
+          // clic encima leía el estado real (activo), calculaba
+          // «apagar» y APAGABA el radar creyendo activarlo, sin ningún
+          // cambio visible para el dueño (la etiqueta quedaba igual).
+          pintarBtnRadar(ses, await contarMomentos(ses.id));
           if (g.modo !== "detencion") { g.modo = "vigilancia"; }
           if (g.rapido) { g.rapido = false; clearInterval(ivGrab); ivGrab = setInterval(paso, 5000); }
           return;

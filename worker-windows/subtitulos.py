@@ -9,6 +9,7 @@ grabación ni en el radar.
 """
 import json, os, subprocess, threading, time
 from pathlib import Path
+from procesos import SIN_VENTANA, flags as _flags_proceso
 
 ROJO = "2020FF"    # #FF2020 en BGR de ASS
 AZUL = "FFBF00"    # #00BFFF en BGR de ASS
@@ -87,8 +88,11 @@ def _bajar_prioridad():
 
 
 def _ffmpeg_baja_prioridad():
+    # Baja prioridad Y sin ventana: con solo BELOW_NORMAL_PRIORITY_CLASS,
+    # cada ffmpeg de subtítulos abría su consola negra en el escritorio
+    # (el motor corre con pythonw, sin consola propia). Ver procesos.py.
     if os.name == "nt":
-        return 0x00004000  # BELOW_NORMAL_PRIORITY_CLASS
+        return _flags_proceso(0x00004000)  # BELOW_NORMAL_PRIORITY_CLASS
     return 0
 
 
@@ -108,7 +112,7 @@ def _tiene_audio(path):
         r = subprocess.run(
             ["ffprobe", "-v", "error", "-select_streams", "a:0",
              "-show_entries", "stream=codec_type", "-of", "csv=p=0", str(path)],
-            capture_output=True, text=True, timeout=30)
+            capture_output=True, text=True, timeout=30, creationflags=SIN_VENTANA)
         return r.returncode == 0 and "audio" in (r.stdout or "")
     except Exception:
         return False
@@ -119,7 +123,7 @@ def _dimensiones(path):
         r = subprocess.run(
             ["ffprobe", "-v", "error", "-select_streams", "v:0",
              "-show_entries", "stream=width,height", "-of", "csv=p=0", str(path)],
-            capture_output=True, text=True, timeout=30)
+            capture_output=True, text=True, timeout=30, creationflags=SIN_VENTANA)
         if r.returncode == 0 and "," in (r.stdout or ""):
             w, h = r.stdout.strip().split(",")[:2]
             return max(2, int(w)), max(2, int(h))
@@ -474,7 +478,7 @@ def aplicar_texto(origen, texto, palabras=None):
         dur = 0
         try:
             r = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration",
-                                "-of", "csv=p=0", str(origen)], capture_output=True, text=True, timeout=30)
+                                "-of", "csv=p=0", str(origen)], capture_output=True, text=True, timeout=30, creationflags=SIN_VENTANA)
             dur = float((r.stdout or "0").strip() or 0)
         except Exception:
             dur = 0

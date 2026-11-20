@@ -1,24 +1,25 @@
 {
   "files": {
-    "actualizador.py": "e9a732bd27498ac300a2e2f10c670edbe861fb5f77fb0301ffdb09073a775ebc",
-    "analyzer.py": "c34bb4d012a5ac12a1dd53f2bda1df93254bc7a0544b6e2b55af66825673c95b",
+    "actualizador.py": "020bce83d887c4005a86a094f4c84e30ad593ea2c0ab58b0fa4389efab77e4d4",
+    "analyzer.py": "b84642360abe95a2985eecf93e990e2a217fa914503b43da8c563d6c75027e41",
     "buffer.py": "6d46ebe08b51414696f4833a0c4e1e0ce803736c324c6f0ae8c77fd628addf41",
-    "clipper.py": "f3b02050a394e223ca170d0ff2ec10229c57ad1ce29541721d44e400a43641d3",
-    "dedup.py": "ea20122f59dae47d8f5551badd43425648de3f6a9281a2a894aed7f9e05e947f",
-    "editor.py": "f74a5b7973b7dd95ba65b8dc1a2ea0456bb5ce31cf362628c850e52e57aaa998",
+    "clipper.py": "5a17ee566dbb11cce8f2b5f29c44bbc48e2af5a22caa2a79c857bbf69c9a3a43",
+    "dedup.py": "5844ec67aa90de00baa151525a26e030ea3e033b7f7297a74634ea73ec63536b",
+    "editor.py": "e803f7c3929cd71ac36161b83154e90da35cc6722847c0fa5dfda3d727c3f338",
     "install-worker.bat": "0d5a5e6f77ddee804b918b297a5372414dd8a3830fa2eaa0aca52812f5bda8e0",
     "install-worker.ps1": "05b0ac2abc25d9b0ccc31016270a7d167a650a2d431e4ac907a3bac65bfa0553",
-    "radar.py": "8f2edf0f1f4e7fbefc5c9b6f7bfb1d1cd9c3c0e31995a393f9f7dc90e53a8226",
-    "recorder.py": "00f2056efb8e5b94bdc4cfa94d3cf47e1dd9eb4abc9b3797cc443e16efadb385",
+    "procesos.py": "ffb78f877a2dc6ebe74be62d979634b9cac3d044dde548ab305b331ce50385e6",
+    "radar.py": "b452a7c8f6ebd56e4756f9d7ed7f18e0f3b021b5cbfc13d64e8da122de0fc169",
+    "recorder.py": "b939bafe8a8db2b7517f2b0bde9a568a0bc53a170d62d109ee13b1a8ffa5c8df",
     "requirements.txt": "ac30d731b1cc532e45a2df0ba9c065375592e66de867fbc6ea6c0c67fefca940",
-    "resolver.py": "38cac32530b6fa8af2444b46aff746d6b8cc9e76d5737bfa613c9e0dc1989cb6",
-    "subtitulos.py": "9aea0529aebb234df51d95231edebd03ed5ca4905a9f78f32e29da3a81cb3ce7",
+    "resolver.py": "2e03fe10b6b6fb6fcc225e50fb64d686c70ab920eed9747c3462d5c11bea22fc",
+    "subtitulos.py": "00436c76593faeb99923c38c930a0255792fd8c707aaf6c6151bc1e92eb179eb",
     "sync.py": "bdb8c03c2563ba05ddb5723d0081b98350150b9195ecbe10c440bad95453a178",
     "titles.py": "dd7c4f1e8d25ce7bb81480212f0cd633a4ac3ef9a019fcda2178f49515b80b2d",
-    "transcribe.py": "c01b3da417ff2bc9296f3cf8950bf45ff0b95c868623ac4df5353a6d1207b883",
-    "viral.py": "1f3cec882915b6a4b7372e7307c7f91ecffe0d8ecd27d9db3f38221581921a83",
-    "vision.py": "3200d0603d22264121459b4c2f599e5b67233686a473b583a3a7c5e163aa043c",
-    "worker.py": "fc492750023f8e696b8ba11f46c98fe2f8b3c67addbbb4b65c0db465198b923f"
+    "transcribe.py": "f2f43819d34833ec1a4f538a02944f5735b03c6a00828ee2d6228216d73167d0",
+    "viral.py": "5fc32a546c762d16564c7ae040570c023004cf10e3b4910d15bc76b00734888c",
+    "vision.py": "a57c2b142ba15ab12b61b3fe4c283c73a0048ec78db9e3da7c07519cbc5d37a0",
+    "worker.py": "063b8f95981c7d42d46eec406a7aee8f659212c29cc36b912b724f7a0a06f916"
   },
-  "version": "1.3.1"
+  "version": "1.3.2"
 }

@@ -18,6 +18,7 @@
 """
 import copy, subprocess
 from pathlib import Path
+from procesos import SIN_VENTANA
 
 UMBRAL_SOLAPE = 0.70
 UMBRAL_HAMMING = 6
@@ -74,7 +75,7 @@ def hash_perceptual(path, segundo=0.0):
         r = subprocess.run(["ffmpeg", "-v", "error", "-ss", str(segundo), "-i", str(path),
                             "-frames:v", "1", "-vf", "scale=8:8,format=gray",
                             "-f", "rawvideo", "-"],
-                           capture_output=True, timeout=120)
+                           capture_output=True, timeout=120, creationflags=SIN_VENTANA)
         datos = r.stdout
         if r.returncode != 0 or len(datos) < 64:
             return None

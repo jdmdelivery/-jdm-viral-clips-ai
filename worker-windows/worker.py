@@ -5,8 +5,9 @@ Uso: python worker.py --config worker-config.json   (ver README.md)"""
 import argparse, json, os, subprocess, sys, threading, time
 from pathlib import Path
 
-VERSION = "1.3.1"
+VERSION = "1.3.2"
 sys.path.insert(0, str(Path(__file__).parent))
+from procesos import SIN_VENTANA
 from sync import ApiClient
 from recorder import Recorder
 from analyzer import analizar_video
@@ -282,6 +283,37 @@ def _configurar_log(cfg):
     except Exception:
         pass
 
+_ARCHIVO_GUARDIA_REINICIO = ".ultimo-reinicio-actualizador.json"
+
+def _reinicio_ya_aplicado(huella):
+    """Guarda anti-bucle: True si el motor YA se relanzó una vez por esta
+    misma huella de actualización (mismo conjunto nombre->hash del
+    manifiesto = mismo código). Si un archivo local nunca pudiera
+    coincidir con el manifiesto (p. ej. algo lo reescribe en la PC con
+    otros bytes), revisar() marcaría «reiniciar» en cada revisión y el
+    motor se relanzaría cada 30 minutos para siempre; con la guarda se
+    relanza una sola vez por actualización y el resto de revisiones
+    solo lo deja registrado en el log."""
+    if not huella:
+        return False
+    try:
+        datos = json.loads((Path(__file__).resolve().parent
+                            / _ARCHIVO_GUARDIA_REINICIO).read_text(encoding="utf-8"))
+        return datos.get("huella") == huella
+    except Exception:
+        return False
+
+def _registrar_reinicio(huella):
+    """Apunta la huella por la que el motor se va a relanzar (ver
+    _reinicio_ya_aplicado). Un fallo aquí nunca impide el reinicio."""
+    if not huella:
+        return
+    try:
+        (Path(__file__).resolve().parent / _ARCHIVO_GUARDIA_REINICIO).write_text(
+            json.dumps({"huella": huella}), encoding="utf-8")
+    except Exception:
+        pass
+
 def _hilo_actualizador(config_path):
     """Actualizador en segundo plano: revisa a los ~20 s del arranque y
     luego cada 30 minutos (antes era cada 6 horas: un arreglo publicado
@@ -303,11 +335,18 @@ def _hilo_actualizador(config_path):
                 for error in resultado.get("errores", []):
                     print(f"Actualizador: {error}")
                 if resultado.get("reiniciar"):
-                    print("Actualizador: el motor se reinicia para aplicar "
-                          "la actualización.")
-                    subprocess.Popen([sys.executable, str(Path(__file__).resolve()),
-                                      "--config", config_path])
-                    os._exit(0)
+                    huella = resultado.get("huella")
+                    if _reinicio_ya_aplicado(huella):
+                        print("Actualizador: esta actualización ya provocó "
+                              "un reinicio antes; NO se reinicia en bucle. "
+                              "Si el problema sigue, reinicia el motor a mano.")
+                    else:
+                        _registrar_reinicio(huella)
+                        print("Actualizador: el motor se reinicia para aplicar "
+                              "la actualización.")
+                        subprocess.Popen([sys.executable, str(Path(__file__).resolve()),
+                                          "--config", config_path], creationflags=SIN_VENTANA)
+                        os._exit(0)
             except Exception as e:
                 print(f"Actualizador: error sin detener el motor: {e}")
             time.sleep(30 * 60)

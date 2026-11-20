@@ -40,10 +40,15 @@ def revisar(carpeta, base_url=URL_BASE, timeout=30):
     """Revisa y aplica actualizaciones en `carpeta` desde `base_url`.
 
     Devuelve {"actualizados": [nombres], "reiniciar": bool,
-              "errores": [str], "sin_cambios": bool}. Nunca lanza."""
+              "errores": [str], "sin_cambios": bool, "huella": str|None}.
+              «huella» es el sha256 del conjunto nombre->hash del
+              manifiesto: identifica EXACTAMENTE un estado del código y
+              el motor la usa como guarda anti-bucle de reinicios (no
+              relanzarse dos veces por la misma actualización). Nunca
+              lanza."""
     carpeta = Path(carpeta)
     resultado = {"actualizados": [], "reiniciar": False,
-                 "errores": [], "sin_cambios": False}
+                 "errores": [], "sin_cambios": False, "huella": None}
     base = str(base_url).rstrip("/")
     try:
         crudo = _descargar(base + "/manifest.json", timeout)
@@ -51,6 +56,8 @@ def revisar(carpeta, base_url=URL_BASE, timeout=30):
         archivos = manifiesto.get("files") or {}
         if not isinstance(archivos, dict):
             raise ValueError("El manifiesto no trae una lista de archivos válida")
+        resultado["huella"] = hashlib.sha256(
+            json.dumps(archivos, sort_keys=True).encode("utf-8")).hexdigest()
     except Exception as e:
         resultado["errores"].append(f"No se pudo leer el manifiesto: {e}")
         resultado["sin_cambios"] = not resultado["actualizados"]

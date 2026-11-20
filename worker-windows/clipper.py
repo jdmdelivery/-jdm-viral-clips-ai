@@ -3,6 +3,7 @@ llena todo el cuadro (escala y recorte del sobrante), sin fondo borroso. Tambié
 Subtítulos DESACTIVADOS por defecto: solo se queman si el usuario pasa un .srt y lo activa."""
 import subprocess
 from pathlib import Path
+from procesos import SIN_VENTANA
 
 FORMATOS = {"9:16": (1080, 1920), "16:9": (1920, 1080), "1:1": (1080, 1080)}
 
@@ -27,7 +28,7 @@ def exportar_clip(fuente, inicio_s, fin_s, salida, formato="9:16", subtitulos=Fa
                "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p",
                "-c:a", "aac", "-ar", "48000", "-shortest"]
     cmd.append(str(salida))
-    r = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
+    r = subprocess.run(cmd, capture_output=True, text=True, timeout=3600, creationflags=SIN_VENTANA)
     if r.returncode != 0 or not Path(salida).exists():
         raise RuntimeError(f"FFmpeg exportando clip falló: {r.stderr[-600:]}")
     return str(salida)
@@ -35,7 +36,7 @@ def exportar_clip(fuente, inicio_s, fin_s, salida, formato="9:16", subtitulos=Fa
 def miniatura(fuente, segundo, salida):
     r = subprocess.run(["ffmpeg", "-y", "-hide_banner", "-loglevel", "error", "-ss", str(segundo),
                         "-i", str(fuente), "-frames:v", "1", str(salida)],
-                       capture_output=True, text=True, timeout=120)
+                       capture_output=True, text=True, timeout=120, creationflags=SIN_VENTANA)
     return str(salida) if r.returncode == 0 and Path(salida).exists() else None
 
 LARGOS_ELEGIBLES = (3, 5, 10, 15, 20)
@@ -63,7 +64,7 @@ def clip_tiene_video(path):
     try:
         r = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0",
                             "-show_entries", "stream=codec_type", "-of", "csv=p=0", str(p)],
-                           capture_output=True, text=True, timeout=30)
+                           capture_output=True, text=True, timeout=30, creationflags=SIN_VENTANA)
         return r.returncode == 0 and "video" in (r.stdout or "")
     except Exception:
         return False

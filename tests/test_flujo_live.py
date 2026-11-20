@@ -15,7 +15,7 @@ Contrato probado (fuente de verdad):
   con anti-duplicado {job_id, duplicado} y 409 si ya hay clip),
   POST /sessions/{id}/generar-clips ({jobs, encolados, omitidos, total_eventos}).
 - GET /jobs incluye «result» parseado (dict); GET /clips acepta ?session_id=.
-- Trabajador VERSION "1.3.1".
+- Trabajador VERSION "1.3.2".
 
 Patrón (como tests/test_api.py y test_fix_panel.py):
 TestClient, registro de usuario + headers Bearer, registro de trabajador
@@ -378,9 +378,9 @@ def test_flujo_descartar_evento():
 # ---------------------------------------------------------------------------
 # Paso 11: versión del trabajador
 # ---------------------------------------------------------------------------
-def test_version_trabajador_1_3_1():
-    assert worker_mod.VERSION == "1.3.1", (
-        f"VERSION del trabajador debe ser «1.3.1», no «{worker_mod.VERSION}»")
+def test_version_trabajador_1_3_2():
+    assert worker_mod.VERSION == "1.3.2", (
+        f"VERSION del trabajador debe ser «1.3.2», no «{worker_mod.VERSION}»")
 
 
 # ---------------------------------------------------------------------------

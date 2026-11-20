@@ -8,6 +8,7 @@ falla, se decodifica el audio con FFmpeg a PCM float32 16 kHz mono y se pasa el
 array a Whisper: misma transcripción, sin depender de PyAV."""
 import subprocess
 from pathlib import Path
+from procesos import SIN_VENTANA
 
 
 def _fmt_ts(segundos):
@@ -37,7 +38,7 @@ def _audio_como_array(path):
     import numpy as np
     r = subprocess.run(["ffmpeg", "-v", "error", "-i", str(path),
                         "-f", "f32le", "-ac", "1", "-ar", "16000", "-"],
-                       capture_output=True, timeout=1800)
+                       capture_output=True, timeout=1800, creationflags=SIN_VENTANA)
     if r.returncode != 0 or not r.stdout:
         raise RuntimeError(f"FFmpeg decodificando audio falló: {r.stderr.decode(errors='ignore')[-300:]}")
     return np.frombuffer(r.stdout, dtype=np.float32)

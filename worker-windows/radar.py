@@ -19,6 +19,7 @@ o al detener la grabación, y nunca se repite un momento ya reportado
 (solape >70% contra lo reportado en esta sesión de radar)."""
 import subprocess, threading, time
 from pathlib import Path
+from procesos import SIN_VENTANA
 import viral, vision
 from clipper import contexto, exportar_clip, miniatura, clip_tiene_video
 from titles import generar as generar_titulos
@@ -88,7 +89,7 @@ class RadarSesion:
         unido = trabajo / f"ventana-{int(ini)}-{int(fin)}.mp4"
         r = subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "concat", "-safe", "0",
                             "-i", str(lista), "-c", "copy", str(unido)],
-                           capture_output=True, text=True, timeout=600)
+                           capture_output=True, text=True, timeout=600, creationflags=SIN_VENTANA)
         if r.returncode != 0 or not unido.exists():
             raise RuntimeError(f"Concat de segmentos del radar falló: {r.stderr[-300:]}")
         salida = (self.carpeta_clips / f"sesion-{self.session_id}"

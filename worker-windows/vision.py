@@ -2,13 +2,14 @@
 OpenCV se usa solo si está instalado (detección de movimiento simple); si no, se informa."""
 import subprocess, re, tempfile
 from pathlib import Path
+from procesos import SIN_VENTANA
 
 def cambios_de_escena(path, umbral=0.35):
     """Cuenta cambios de escena reales decodificando con el filtro select/showinfo."""
     try:
         r = subprocess.run(["ffmpeg", "-i", str(path), "-filter:v",
                             f"select='gt(scene\\,{umbral})',showinfo", "-f", "null", "-"],
-                           capture_output=True, text=True, timeout=600)
+                           capture_output=True, text=True, timeout=600, creationflags=SIN_VENTANA)
         return len(re.findall(r"showinfo.*n:\s*\d+", r.stderr))
     except Exception:
         return 0
@@ -54,7 +55,7 @@ def _asegurar_modelo_yunet():
 def _duracion(path):
     try:
         r = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration",
-                            "-of", "csv=p=0", str(path)], capture_output=True, text=True, timeout=60)
+                            "-of", "csv=p=0", str(path)], capture_output=True, text=True, timeout=60, creationflags=SIN_VENTANA)
         return float(r.stdout.strip())
     except Exception:
         return 0.0
@@ -80,11 +81,11 @@ def detectar_rostros(path, segundo=None):
         with tempfile.TemporaryDirectory() as td:
             frame = str(Path(td) / "frame.jpg")
             r = subprocess.run(["ffmpeg", "-y", "-v", "error", "-ss", str(segundo), "-i", str(path),
-                                "-frames:v", "1", frame], capture_output=True, text=True, timeout=120)
+                                "-frames:v", "1", frame], capture_output=True, text=True, timeout=120, creationflags=SIN_VENTANA)
             if r.returncode != 0 or not Path(frame).exists():
                 # FFmpeg 8 no extrae frame de una imagen fija con -ss previo: reintento sin seek.
                 r = subprocess.run(["ffmpeg", "-y", "-v", "error", "-i", str(path),
-                                    "-frames:v", "1", frame], capture_output=True, text=True, timeout=120)
+                                    "-frames:v", "1", frame], capture_output=True, text=True, timeout=120, creationflags=SIN_VENTANA)
             if r.returncode != 0 or not Path(frame).exists():
                 return {"disponible": False, "rostros": None,
                         "nota": "No se pudo extraer el frame central con FFmpeg."}
@@ -126,7 +127,7 @@ def conteo_movimiento(path, fps=2, ancho=64, alto=36):
         tam = ancho * alto
         r = subprocess.run(["ffmpeg", "-v", "error", "-i", str(path),
                             "-vf", f"fps={fps},scale={ancho}:{alto},format=gray",
-                            "-f", "rawvideo", "-"], capture_output=True, timeout=600)
+                            "-f", "rawvideo", "-"], capture_output=True, timeout=600, creationflags=SIN_VENTANA)
         datos = r.stdout
         n_frames = len(datos) // tam
         if r.returncode != 0 or n_frames < 2:
