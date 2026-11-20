@@ -51,6 +51,7 @@ class Recorder:
         self.en_vivo, self.max_reintentos = en_vivo, max_reintentos
         self.proc = None; self.detener_flag = threading.Event()
         self.hilo = None; self.reintentos = 0; self.inicio = None
+        self._t_inicio = time.time()  # inicio de ESTA corrida (filtro de segmentos viejos)
         self._cursor = 0.0; self._finalizados = set(); self.error_union = ""
     def _segmentos(self):
         return sorted(self.outdir.glob("seg_*.mp4"))
@@ -134,10 +135,20 @@ class Recorder:
     def _captura_lista(self, min_bytes):
         for p in self._segmentos():
             try:
-                tam = p.stat().st_size
+                st = p.stat(); tam = st.st_size
             except OSError:
                 continue
             if tam < min_bytes:
+                continue
+            # Solo vale video de ESTA corrida: la carpeta de la sesión se
+            # reutiliza entre grabaciones y un segmento viejo (de una
+            # captura anterior, o escrito por un FFmpeg huérfano cuyo
+            # motor ya murió) no prueba que esta captura esté escribiendo.
+            # Sin este filtro, esperar_datos confirmaba «grabando» con
+            # datos viejos aunque el FFmpeg nuevo hubiera muerto al
+            # arrancar. Un segmento reescrito por el FFmpeg actual trae
+            # mtime fresco y sí cuenta.
+            if st.st_mtime < self._t_inicio - 1.0:
                 continue
             if self._pista(p, "v:0"):
                 return {"bytes": tam, "tiene_video": True, "tiene_audio": self._pista(p, "a:0"),
@@ -176,6 +187,7 @@ class Recorder:
                 return False, self._motivo_sin_captura()
             time.sleep(0.4)
     def start(self):
+        self._t_inicio = time.time()
         self.hilo = threading.Thread(target=self._bucle, daemon=True); self.hilo.start()
     def stop(self):
         self.detener_flag.set()
@@ -191,20 +203,30 @@ class Recorder:
         self._finalizar_todos()
         return self.unir()
     def bytes_en_disco(self):
-        """Bytes ya escritos: la película unida si existe, si no la suma de segmentos."""
-        film = self.outdir / "grabacion_completa.mp4"
-        try:
-            if film.is_file() and film.stat().st_size >= 8192:
-                return film.stat().st_size
-        except OSError:
-            pass
+        """Bytes de ESTA captura: la suma de los segmentos en disco.
+
+        La película unida solo cuenta cuando NO hay segmentos. La carpeta
+        de la sesión se reutiliza entre grabaciones: una
+        grabacion_completa.mp4 de una captura ANTERIOR no es progreso de
+        esta, y devolverla primero congelaba el contador del panel en el
+        tamaño de la película vieja (316.8 MB fijos) mientras la captura
+        real seguía escribiendo segmentos (caso trabajo #71, 2026-11-20).
+        Tras unir, los segmentos siguen en disco, así que la suma sigue
+        representando el total capturado."""
         total = 0
         for p in self._segmentos():
             try:
                 if p.is_file(): total += p.stat().st_size
             except OSError:
                 continue
-        return total
+        if total > 0:
+            return total
+        film = self.outdir / "grabacion_completa.mp4"
+        try:
+            if film.is_file(): return film.stat().st_size
+        except OSError:
+            pass
+        return 0
     def _film_valida(self, path):
         path = Path(path)
         try:

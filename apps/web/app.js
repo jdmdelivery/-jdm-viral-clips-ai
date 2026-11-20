@@ -195,6 +195,13 @@ function seguirEstadoGrabacion(sid, jobId, modo) {
       if (ses) {
         if (ses.status === "grabando") {
           mostrarGrabando(ses);
+          // La confirmación CIERRA el aviso de espera. Sin esto, el texto
+          // de «Iniciando…» que pone iniciarGrab() al crear el trabajo se
+          // quedaba en pantalla para siempre junto a la píldora de
+          // «RADAR ANALIZANDO»/«GRABANDO», como si el trabajador nunca
+          // hubiera confirmado aunque la sesión ya estaba «grabando»
+          // (caso trabajo #71, 2026-11-20).
+          if (g.modo === "inicio") setLiveMsg("Grabación confirmada por el trabajador" + (g.jobId ? " (trabajo #" + g.jobId + ")" : "") + ": la captura está en curso.", true);
           // La etiqueta del botón del radar y su cuenta de momentos se
           // repintan con el estado FRESCO en cada paso de seguimiento.
           // Sin esto, el botón conservaba el texto de antes de grabar
