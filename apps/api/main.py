@@ -1152,7 +1152,16 @@ def list_clips(session_id: int | None = None, limit: int = 200, offset: int = 0,
     for c in q:
         if not _clip_autorizado(s, c, user): continue
         d = ser(c, ["id", "event_id", "project_id", "session_id", "file_path", "thumb_path", "format", "duration_s", "score", "title", "subtitles", "status", "created_at"])
-        ses = s.get(LiveSession, c.session_id) if c.session_id else None
+        # Sesión EFECTIVA para mostrar: los clips completados antes del
+        # arreglo de herencia (2026-11-19) quedaron con session_id vacío
+        # aunque su evento sí sabe a qué sesión pertenece, y el panel los
+        # enseñaba como «Sin sesión». Solo cambia lo que se MUESTRA en el
+        # listado; la fila guardada no se reescribe.
+        if not d.get("session_id") and c.event_id:
+            ev = s.get(Event, c.event_id)
+            if ev is not None and ev.session_id:
+                d["session_id"] = ev.session_id
+        ses = s.get(LiveSession, d["session_id"]) if d.get("session_id") else None
         d["sesion_titulo"] = ses.title if ses else ""
         d["descargable"] = _archivo_clip(c) is not None
         d["tiene_copia_servidor"] = _tiene_copia(c)

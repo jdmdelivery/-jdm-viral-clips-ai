@@ -5,7 +5,7 @@ Uso: python worker.py --config worker-config.json   (ver README.md)"""
 import argparse, json, os, subprocess, sys, threading, time
 from pathlib import Path
 
-VERSION = "1.3.0"
+VERSION = "1.3.1"
 sys.path.insert(0, str(Path(__file__).parent))
 from sync import ApiClient
 from recorder import Recorder
@@ -284,9 +284,13 @@ def _configurar_log(cfg):
 
 def _hilo_actualizador(config_path):
     """Actualizador en segundo plano: revisa a los ~20 s del arranque y
-    luego cada 6 horas. Si una actualización toca worker.py o
-    actualizador.py, relanza el motor y sale. Nunca tumba el bucle
-    principal: todo va envuelto en try/except."""
+    luego cada 30 minutos (antes era cada 6 horas: un arreglo publicado
+    podía tardar horas en llegar a un motor que ya estaba encendido, y el
+    dueño veía «sigue igual» aunque el arreglo ya existiera). Si una
+    actualización toca cualquier .py, relanza el motor y sale: los
+    módulos se importan al arrancar y sin relanzar seguiría corriendo el
+    código viejo en memoria. Nunca tumba el bucle principal: todo va
+    envuelto en try/except."""
     try:
         time.sleep(20)
         while True:
@@ -306,7 +310,7 @@ def _hilo_actualizador(config_path):
                     os._exit(0)
             except Exception as e:
                 print(f"Actualizador: error sin detener el motor: {e}")
-            time.sleep(6 * 3600)
+            time.sleep(30 * 60)
     except Exception as e:
         print(f"Actualizador: hilo detenido por un error: {e}")
 
@@ -327,7 +331,7 @@ def main():
     else:
         print("Actualizador: desactivado en esta configuración local.")
     api = ApiClient(cfg["api_url"], cfg["worker_token"], cfg.get("cola_offline", "cola-offline.json"))
-    print(f"Trabajador conectado a {cfg['api_url']} — Ctrl+C para salir")
+    print(f"Motor JDM Viral Clips AI v{VERSION} conectado a {cfg['api_url']} — Ctrl+C para salir")
     try:
         from subtitulos import iniciar_cola
         iniciar_cola(cfg, api, lambda: bool(grabaciones))

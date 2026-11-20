@@ -6,13 +6,20 @@ copia descargada coincide EXACTAMENTE con el hash publicado (si no, se
 borra la descarga y el original queda intacto). Antes de sustituir guarda
 una copia .bak. revisar() NUNCA lanza: cualquier error queda registrado en
 el resultado para que un fallo del actualizador jamás tumbe el motor.
+
+REINICIO: worker.py importa TODOS los módulos del trabajador al arrancar
+(«from resolver import …», «from recorder import …», etc.) y Python los
+deja cargados en memoria para toda la vida del proceso. Sustituir un .py
+en disco sin reiniciar NO cambia el código que se está ejecutando: el
+motor seguiría fallando igual aunque el arreglo ya estuviera descargado
+(así pasó con el resolver nuevo del 2026-11-19: el panel seguía enseñando
+el error viejo). Por eso CUALQUIER .py actualizado marca «reiniciar» y el
+hilo actualizador relanza el motor.
 """
 import hashlib, json, os, shutil, urllib.request
 from pathlib import Path
 
 URL_BASE = "https://raw.githubusercontent.com/jdmdelivery/-jdm-viral-clips-ai/main/worker-windows"
-
-ARCHIVOS_QUE_REINICIAN = ("worker.py", "actualizador.py")
 
 
 def sha256_de(path):
@@ -77,7 +84,10 @@ def revisar(carpeta, base_url=URL_BASE, timeout=30):
                 shutil.copy2(destino, carpeta / (nombre + ".bak"))
             os.replace(temporal, destino)
             resultado["actualizados"].append(nombre)
-            if nombre in ARCHIVOS_QUE_REINICIAN:
+            # Cualquier .py actualizado exige relanzar el motor: el proceso
+            # en marcha ya lo tiene importado en memoria y seguiría
+            # ejecutando el código viejo (ver docstring del módulo).
+            if nombre.endswith(".py"):
                 resultado["reiniciar"] = True
         except Exception as e:
             resultado["errores"].append(f"Error actualizando {nombre}: {e}")

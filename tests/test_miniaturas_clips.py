@@ -93,6 +93,35 @@ def test_subir_miniatura_y_servirla():
     assert r.status_code == 200 and r.content == JPG
 
 
+def test_clip_viejo_sin_sesion_muestra_la_de_su_evento():
+    """Los clips completados ANTES del arreglo de herencia quedaron con
+    session_id vacío en la base de datos aunque su evento sí tiene
+    sesión (los dos clips de las 13:39 del 2026-11-19): el listado debe
+    mostrar la sesión del evento, no «Sin sesión». La fila no se toca."""
+    h = _usuario(); wh = _worker(h)
+    ses = client.post("/sessions", json={"title": "Sesión heredada"}, headers=h).json()
+    r = client.post(f"/workers/sessions/{ses['id']}/live-events", headers=wh, json={
+        "events": [{"start_s": 200, "end_s": 230, "type": "general", "mode": "general",
+                    "score": 85, "breakdown": {}}],
+        "clips": []})
+    assert r.status_code == 200, r.text
+    s = apimain.SessionLocal()
+    try:
+        ev = s.query(apimain.Event).filter_by(session_id=ses["id"]).order_by(
+            apimain.Event.id.desc()).first()
+        assert ev is not None
+        c = apimain.Clip(event_id=ev.id, session_id=None, file_path=RUTA_MP4,
+                         format="9:16", duration_s=45.0, score=85,
+                         title="Momento destacado en el LIVE")
+        s.add(c); s.commit(); cid = c.id
+    finally:
+        s.close()
+    d = next(c for c in client.get("/clips", headers=h).json() if c["id"] == cid)
+    assert d["session_id"] == ses["id"]
+    assert d["sesion_titulo"] == "Sesión heredada"
+    assert d["archivo_existe"] is True
+
+
 def test_apiclient_subir_miniatura_contra_stub(tmp_path):
     recibido = {}
     class Manejador(BaseHTTPRequestHandler):

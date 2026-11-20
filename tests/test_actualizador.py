@@ -66,6 +66,27 @@ def test_revisar_actualiza_y_marca_reinicio(tmp_path):
         servidor.shutdown()
 
 
+def test_revisar_solo_un_modulo_tambien_reinicia(tmp_path):
+    """Regresión 2026-11-19: actualizar SOLO resolver.py debe marcar
+    reinicio. Antes solo worker.py/actualizador.py reiniciaban, y como el
+    proceso importa los módulos al arrancar, el motor seguía ejecutando
+    el resolver viejo en memoria aunque el archivo nuevo ya estuviera en
+    disco: el panel enseñaba el mismo error tras publicar el arreglo."""
+    remoto, local = tmp_path / "remoto", tmp_path / "local"
+    remoto.mkdir(); local.mkdir()
+    _preparar_remoto(remoto, {"resolver.py": "# resolver nuevo\n"})
+    (local / "resolver.py").write_text("# resolver viejo\n", encoding="utf-8")
+    servidor, base = _servir(remoto)
+    try:
+        r = actualizador.revisar(local, base_url=base, timeout=10)
+        assert r["errores"] == []
+        assert r["actualizados"] == ["resolver.py"]
+        assert r["reiniciar"] is True
+        assert (local / "resolver.py").read_text(encoding="utf-8") == "# resolver nuevo\n"
+    finally:
+        servidor.shutdown()
+
+
 def test_revisar_hash_distinto_no_toca_original(tmp_path):
     remoto, local = tmp_path / "remoto", tmp_path / "local"
     remoto.mkdir(); local.mkdir()
