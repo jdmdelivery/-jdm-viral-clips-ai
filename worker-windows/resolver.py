@@ -41,10 +41,18 @@ def es_senal_directa(url):
 def _ejecutar_ytdlp(url):
     """Corre yt-dlp en modo «solo dame la URL de la señal» (-g).
     Devuelve (returncode, stdout, stderr). Aislado para poder simularlo
-    en los tests sin red ni yt-dlp real."""
+    en los tests sin red ni yt-dlp real.
+
+    Selector de formato: primero «best» (un solo archivo con audio+video,
+    lo normal en un directo). Si la plataforma no ofrece ese archivo
+    único —pasa en videos ya publicados, cuyos formatos vienen separados
+    en video y audio— se acepta el par «bv*+ba» (mejor video + mejor
+    audio): -g lo devuelve como DOS líneas y el Recorder las abre como
+    dos entradas de FFmpeg. Con solo «best», un video válido fallaba con
+    «Requested format is not available»."""
     try:
         r = subprocess.run([sys.executable, "-m", "yt_dlp", "-g", "--no-warnings",
-                            "-f", "best", str(url)],
+                            "-f", "best/bv*+ba", str(url)],
                            capture_output=True, text=True, timeout=180)
         return r.returncode, r.stdout or "", r.stderr or ""
     except subprocess.TimeoutExpired:
@@ -62,6 +70,14 @@ def _error_desde_stderr(stderr):
             or "granted access" in baja):
         return ("El video/en vivo es privado: no se puede grabar sin acceso a la "
                 "cuenta dueña del contenido.")
+    # ANTES del chequeo de «not available»: «Requested format is not
+    # available» es un fallo de FORMATO en un video que SÍ existe (yt-dlp
+    # no encontró el formato pedido), no un video borrado. Clasificarlo
+    # como «no está disponible» enseñaba en el panel que el video estaba
+    # borrado/restringido siendo falso.
+    if "format is not available" in baja or "requested format" in baja:
+        return ("La plataforma no ofreció un formato grabable para ese video "
+                "(ni combinado ni por separado).")
     if ("video unavailable" in baja or "video is unavailable" in baja
             or "no longer available" in baja or "has been removed" in baja
             or "not available" in baja):
@@ -112,4 +128,7 @@ def resolver_fuente(url):
     if not senales:
         raise ErrorResolucion("La plataforma no entregó ninguna señal para ese enlace "
                               "(¿es un en vivo válido y ya comenzó?).")
-    return senales[0]
+    # Una señal: la URL tal cual. Dos (video y audio por separado, del
+    # selector «bv*+ba»): unidas por salto de línea, en ese orden; el
+    # Recorder las abre como dos entradas de FFmpeg (ver _cmd_grabar).
+    return "\n".join(senales[:2])

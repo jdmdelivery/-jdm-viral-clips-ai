@@ -122,6 +122,7 @@ class RadarSesion:
         # mismo orden que los clips enviados; si la subida falla, el clip
         # queda creado igual y la copia se puede pedir desde el panel.
         subir = getattr(self.api, "subir_clip", None)
+        subir_thumb = getattr(self.api, "subir_miniatura", None)
         ids = (respuesta or {}).get("clip_ids") or []
         if subir is not None and clips:
             for clip, cid in zip(clips, ids):
@@ -130,6 +131,14 @@ class RadarSesion:
                 try: subir(cid, ruta)
                 except Exception as e:
                     self.errores.append(f"subida automática del clip {cid}: {e}")
+                # La miniatura viaja con la copia: sin su JPG en el
+                # servidor, el panel enseña «Sin miniatura» aunque el
+                # archivo exista en esta PC.
+                thumb = (clip or {}).get("thumb_path")
+                if subir_thumb is not None and thumb:
+                    try: subir_thumb(cid, thumb)
+                    except Exception as e:
+                        self.errores.append(f"subida de la miniatura del clip {cid}: {e}")
         return True
 
     def _reintentar_pendientes(self):

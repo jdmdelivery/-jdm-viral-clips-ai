@@ -96,6 +96,29 @@ class ApiClient:
             if intento < max(1, reintentos):
                 _time.sleep(2 * intento)
         raise ultimo
+    def subir_miniatura(self, clip_id, ruta, reintentos=3):
+        """Sube la MINIATURA (JPG) del clip al servidor (POST
+        /clips/{id}/miniatura-archivo, token de trabajador): el JPG se
+        genera en esta PC junto al MP4 y el panel no puede servir la ruta
+        local, así que sin esta copia el clip sale «Sin miniatura».
+        Mismo criterio de reintentos que subir_clip."""
+        import time as _time
+        ultimo = None
+        for intento in range(1, max(1, reintentos) + 1):
+            try:
+                with open(ruta, "rb") as f:
+                    r = requests.post(self.base + f"/clips/{clip_id}/miniatura-archivo",
+                                      headers={**self.headers, "Content-Type": "image/jpeg"},
+                                      data=f, timeout=120)
+                if r.status_code < 500:
+                    r.raise_for_status()  # 4xx: error definitivo, sin reintento
+                    return r.json()
+                ultimo = requests.HTTPError(f"HTTP {r.status_code} al subir la miniatura del clip {clip_id}")
+            except requests.RequestException as e:
+                ultimo = e
+            if intento < max(1, reintentos):
+                _time.sleep(2 * intento)
+        raise ultimo
     def subir_subtitulado(self, clip_id, ruta, reintentos=3):
         """Sube el MP4 con subtítulos ya quemados. No envía la ruta local:
         el servidor lo guarda con la clave del clip."""

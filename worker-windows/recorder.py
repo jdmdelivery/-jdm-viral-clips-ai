@@ -18,8 +18,16 @@ def duracion_real(path):
 
 def _cmd_grabar(fuente, outdir, start_number=0, en_vivo=False):
     cmd = ["ffmpeg", "-hide_banner", "-loglevel", "warning"]
-    if en_vivo: cmd += ["-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5"]
-    cmd += ["-i", str(fuente), "-map", "0:v:0?", "-map", "0:a:0?",
+    # La fuente puede traer DOS URLs unidas por salto de línea (video y
+    # audio por separado, desde resolver.py): cada una es una entrada de
+    # FFmpeg, el video sale de la primera y el audio de la última. Con una
+    # sola URL el comando es el histórico.
+    entradas = [l.strip() for l in str(fuente).splitlines() if l.strip()]
+    if not entradas: entradas = [str(fuente)]
+    for entrada in entradas:
+        if en_vivo: cmd += ["-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5"]
+        cmd += ["-i", entrada]
+    cmd += ["-map", "0:v:0?", "-map", f"{len(entradas) - 1}:a:0?",
             "-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2",
             "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p", "-sc_threshold", "0",
             "-force_key_frames", f"expr:gte(t,n_forced*{SEG})",

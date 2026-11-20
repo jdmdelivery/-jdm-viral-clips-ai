@@ -142,6 +142,10 @@ class Clip(Base):
     # ver/descargar desde el panel; NULL = sin copia. En BD existentes la
     # añade la auto-migración; create_all la crea solo en BD nuevas.
     archivo_servidor = Column(Text, nullable=True)
+    # Miniatura del clip guardada EN ESTE servidor (la sube el trabajador:
+    # el JPG se genera en su PC junto al MP4 y su ruta local no se puede
+    # servir desde aquí). Ruta local en disco o URI r2://; NULL = sin copia.
+    miniatura_servidor = Column(Text, nullable=True)
     # Estado de subtítulos en la base. subtitulo_path guarda solo la clave
     # relativa dentro del almacén (clip_12.subtitulado.mp4), nunca una ruta
     # de Windows. En producción estas columnas ya existen; create_all las
@@ -226,6 +230,9 @@ _COLUMNAS_POST_001 = [
     ("clips", "subtitulo_texto",
      {"postgresql": "TEXT DEFAULT ''", "sqlite": "TEXT DEFAULT ''"}),
     ("clips", "subtitulo_path",
+     {"postgresql": "TEXT", "sqlite": "TEXT"}),
+    # copia de la miniatura en el servidor (la sube el trabajador)
+    ("clips", "miniatura_servidor",
      {"postgresql": "TEXT", "sqlite": "TEXT"}),
 ]
 def _auto_migrar_columnas():
@@ -448,6 +455,14 @@ def _archivo_subtitulado(c):
         return None
     return ruta
 def _miniatura_clip(c):
+    # Primero la copia que el trabajador subió a ESTE servidor (disco):
+    # thumb_path suele ser la ruta del JPG en la PC del trabajador y en
+    # el disco del servidor no existe, así que sin copia nunca había
+    # miniatura servible aunque el JPG existiera en la PC.
+    copia = getattr(c, "miniatura_servidor", None) if c else None
+    if copia and not almacen_r2.es_uri(copia):
+        p = Path(copia)
+        if p.is_file(): return p.resolve()
     if c and c.thumb_path and Path(c.thumb_path).is_file():
         return Path(c.thumb_path).resolve()
     origen = _archivo_clip(c)
@@ -455,6 +470,12 @@ def _miniatura_clip(c):
         jpg = origen.with_suffix(".jpg")
         if jpg.is_file(): return jpg.resolve()
     return None
+def _tiene_miniatura(c):
+    """True si el panel puede MOSTRAR la miniatura: archivo local servible
+    o copia guardada en R2 por el trabajador."""
+    if not c: return False
+    if almacen_r2.es_uri(getattr(c, "miniatura_servidor", None)): return True
+    return _miniatura_clip(c) is not None
 def _es_grabacion_completa(path: Path):
     return path.name == "grabacion_completa.mp4" or "grabaciones" in path.parts and "clips" not in path.parts
 def _borrar_archivo_de_clip(path: Path):
@@ -613,7 +634,8 @@ class LiveEventIn(BaseModel):
     score: int = 0; breakdown: dict = {}
 class LiveClipIn(BaseModel):
     event_index: int | None = None; start_s: float | None = None
-    file_path: str | None = None; format: str = "9:16"; duration_s: float | None = None
+    file_path: str | None = None; thumb_path: str | None = None
+    format: str = "9:16"; duration_s: float | None = None
     score: int = 0; title: str | None = None; titles: dict = {}; subtitles: bool = False
 class LiveIngestIn(BaseModel):
     events: list[LiveEventIn] = []; clips: list[LiveClipIn] = []
@@ -907,7 +929,7 @@ def complete_job(jid: int, body: dict, w=Depends(worker_auth), s=Depends(db)):
     for cl in res.get("clips", []):
         c = Clip(event_id=cl.get("event_id") or (origen.event_id if origen else None),
                  project_id=cl.get("project_id") or _payload_project(j) or (origen.project_id if origen else None),
-                 session_id=cl.get("session_id") or (origen.session_id if origen else None),
+                 session_id=cl.get("session_id") or _payload_session(j) or (origen.session_id if origen else None),
                  file_path=cl.get("file_path"), thumb_path=cl.get("thumb_path"),
                  format=cl.get("format", "9:16"),
                  duration_s=cl.get("duration_s"), score=int(cl.get("score", 0)), title=cl.get("title"),
@@ -933,6 +955,9 @@ def complete_job(jid: int, body: dict, w=Depends(worker_auth), s=Depends(db)):
     return {"ok": True, "clip_ids": [c.id for c in clips_persistidos]}
 def _payload_project(job):
     try: return json.loads(job.payload or "{}").get("project_id")
+    except Exception: return None
+def _payload_session(job):
+    try: return json.loads(job.payload or "{}").get("session_id")
     except Exception: return None
 def _piloto_publicaciones(s, clips):
     """Etapa 5: con el piloto activo, por cada clip de un job «generar_clip» crea una
@@ -1024,11 +1049,12 @@ def live_events_ingest(sid: int, data: LiveIngestIn, w=Depends(worker_auth), s=D
             existente = s.query(Clip).filter_by(session_id=sid, file_path=cl.file_path).first()
         if existente is not None:
             clip_ids.append(existente.id); continue
-        thumb = None
-        if cl.file_path:
-            jpg = Path(cl.file_path).with_suffix(".jpg")
-            if jpg.is_file(): thumb = str(jpg)
-        c = Clip(event_id=ev_id, session_id=sid, file_path=cl.file_path, thumb_path=thumb,
+        # La miniatura se guarda con la ruta que reporta el TRABAJADOR (el
+        # JPG se genera en su PC junto al MP4). Comprobar esa ruta contra
+        # el disco de ESTE servidor daba siempre «sin miniatura»: la ruta
+        # es de Windows y aquí no existe. La copia servible sube después
+        # por POST /clips/{id}/miniatura-archivo.
+        c = Clip(event_id=ev_id, session_id=sid, file_path=cl.file_path, thumb_path=cl.thumb_path,
                  format=cl.format, duration_s=cl.duration_s, score=int(cl.score), title=cl.title,
                  titles_json=json.dumps(cl.titles or {}), subtitles=bool(cl.subtitles))
         s.add(c); s.commit(); clips_guardados += 1; clip_ids.append(c.id)
@@ -1130,8 +1156,14 @@ def list_clips(session_id: int | None = None, limit: int = 200, offset: int = 0,
         d["sesion_titulo"] = ses.title if ses else ""
         d["descargable"] = _archivo_clip(c) is not None
         d["tiene_copia_servidor"] = _tiene_copia(c)
-        d["tiene_miniatura"] = _miniatura_clip(c) is not None
-        d["archivo_existe"] = bool(c.file_path and Path(c.file_path).is_file())
+        d["tiene_miniatura"] = _tiene_miniatura(c)
+        # El archivo del clip vive en la PC del trabajador: file_path es la
+        # ruta que el propio trabajador reportó al crear el clip (tras
+        # generarlo y verificarlo en su disco), o hay copia aquí/R2. Antes
+        # se comprobaba la ruta de Windows contra el disco de ESTE servidor
+        # y daba siempre False: el panel enseñaba «archivo no encontrado»
+        # en clips que sí existen en la PC.
+        d["archivo_existe"] = bool(c.file_path or _archivo_clip(c) is not None or _tiene_copia(c))
         d.update(_estado_subtitulos(c))
         out.append(d)
     return out
@@ -1215,8 +1247,25 @@ def miniatura_clip(cid: int, user=Depends(current_user), s=Depends(db)):
     if not c: raise HTTPException(404, "Clip no encontrado")
     if not _clip_autorizado(s, c, user): raise HTTPException(403, "No puedes abrir un clip de otra cuenta.")
     jpg = _miniatura_clip(c)
-    if not jpg: raise HTTPException(404, "Este clip no tiene miniatura.")
-    return FileResponse(jpg, media_type="image/jpeg")
+    if jpg: return FileResponse(jpg, media_type="image/jpeg")
+    # Copia en R2: se lee del bucket y se sirve como imagen (nunca es una
+    # grabación completa: la clave de miniatura la escribe este servidor).
+    uri = getattr(c, "miniatura_servidor", None)
+    if almacen_r2.es_uri(uri):
+        almacen = almacen_r2.desde_entorno()
+        bucket, clave = almacen_r2.clave_de_uri(uri)
+        if almacen is not None and bucket == almacen.bucket and clave:
+            resp = almacen.abrir(clave)
+            if resp.status_code == 200:
+                def bloques():
+                    try:
+                        for bloque in resp.iter_content(256 * 1024):
+                            if bloque: yield bloque
+                    finally:
+                        resp.close()
+                return StreamingResponse(bloques(), media_type="image/jpeg")
+            resp.close()
+    raise HTTPException(404, "Este clip no tiene miniatura.")
 
 def _medio_subtitulado(c):
     """MP4 subtitulado dentro del almacén de la API. Ignora rutas de Windows."""
@@ -1555,6 +1604,37 @@ async def subir_archivo_clip(cid: int, request: Request, w=Depends(worker_auth),
     c.archivo_servidor = str(dest); s.commit()
     audit(s, f"trabajador:{w.name}", "subir_copia_clip", f"clip {cid}: {size} bytes")
     return {"ok": True, "clip_id": cid, "bytes": size, "archivo_servidor": dest.name}
+@app.post("/clips/{cid}/miniatura-archivo")
+async def subir_miniatura_clip(cid: int, request: Request, w=Depends(worker_auth), s=Depends(db)):
+    """Subida de la MINIATURA por el TRABAJADOR (X-Worker-Token): cuerpo
+    crudo del JPG que el trabajador generó junto al MP4 en su PC. Sin esta
+    copia el panel no puede mostrar la miniatura: la ruta del JPG vive en
+    la PC, no en el servidor. Re-subir reemplaza la copia anterior (es una
+    imagen derivada del mismo clip, no el original)."""
+    c = s.get(Clip, cid)
+    if not c: raise HTTPException(404, "Clip no encontrado")
+    datos = await request.body()
+    if not datos:
+        raise HTTPException(400, "La miniatura llegó vacía: no se guardó ninguna copia")
+    if len(datos) > 10 * 1024 * 1024:
+        raise HTTPException(413, "La miniatura supera el límite de copia en el servidor (10 MB)")
+    almacen = almacen_r2.desde_entorno()
+    if almacen is not None:
+        uid, sid = _ids_almacen(s, c)
+        clave = f"usuarios/{uid}/sesiones/{sid}/clips/{cid}/miniatura.jpg"
+        resp = almacen.put(clave, datos, "image/jpeg")
+        codigo = resp.status_code; resp.close()
+        if codigo not in (200, 201):
+            raise HTTPException(502, "No se pudo guardar la miniatura en R2.")
+        c.miniatura_servidor = almacen.uri(clave); s.commit()
+        audit(s, f"trabajador:{w.name}", "subir_miniatura_clip", f"clip {cid}: {len(datos)} bytes en r2")
+        return {"ok": True, "clip_id": cid, "bytes": len(datos), "archivo_servidor": clave, "destino": "r2"}
+    base_copia = directorio_medios() or CLIPS_DIR
+    dest = base_copia / f"clip_{cid}.jpg"
+    dest.write_bytes(datos)
+    c.miniatura_servidor = str(dest); s.commit()
+    audit(s, f"trabajador:{w.name}", "subir_miniatura_clip", f"clip {cid}: {len(datos)} bytes")
+    return {"ok": True, "clip_id": cid, "bytes": len(datos), "archivo_servidor": dest.name, "destino": "disco"}
 @app.get("/clips/{cid}/archivo")
 def obtener_archivo_clip(cid: int, request: Request, descargar: int = 0, user=Depends(current_user), s=Depends(db)):
     """Sirve la copia del clip al USUARIO del panel. Sin «descargar», se

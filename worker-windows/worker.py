@@ -199,8 +199,19 @@ def procesar(job, cfg, api=None):
         if api is None:
             raise RuntimeError("Sin cliente de API: no se puede subir el clip")
         r = api.subir_clip(int(p["clip_id"]), ruta)
+        # La miniatura (el JPG hermano del MP4) sube con la copia: así los
+        # clips que ya existían también ganan su miniatura en el panel al
+        # pedir VER/DESCARGAR. Si falla, la copia del video ya quedó bien.
+        miniatura = False
+        jpg = Path(ruta).with_suffix(".jpg")
+        if jpg.is_file() and hasattr(api, "subir_miniatura"):
+            try:
+                api.subir_miniatura(int(p["clip_id"]), str(jpg)); miniatura = True
+            except Exception as e:
+                print(f"Miniatura del clip {p['clip_id']} NO subida ({e}); la copia del video sí.")
         return {"subido": True, "clip_id": p["clip_id"],
-                "bytes": (r or {}).get("bytes"), "archivo_local": ruta}
+                "bytes": (r or {}).get("bytes"), "archivo_local": ruta,
+                "miniatura_subida": miniatura}
     if tipo == "corregir_subtitulos":
         from subtitulos import aplicar_texto
         ruta = p.get("file_path")
@@ -233,6 +244,15 @@ def _subir_copias_automaticas(resultado, detalle, api):
             print(f"Copia del clip {cid} subida al servidor (ya se puede ver en el panel).")
         except Exception as e:
             print(f"Copia del clip {cid} NO subida ({e}); se puede pedir desde el panel.")
+        # La miniatura viaja con la copia (el panel no puede servir la
+        # ruta del JPG en esta PC): sin ella el clip sale «Sin miniatura».
+        thumb = (info or {}).get("thumb_path")
+        if thumb and Path(thumb).is_file() and hasattr(api, "subir_miniatura"):
+            try:
+                api.subir_miniatura(cid, thumb)
+                print(f"Miniatura del clip {cid} subida al servidor.")
+            except Exception as e:
+                print(f"Miniatura del clip {cid} NO subida ({e}).")
 
 def _configurar_log(cfg):
     """Motor invisible: sin consola (pythonw, sys.stdout es None o sin
