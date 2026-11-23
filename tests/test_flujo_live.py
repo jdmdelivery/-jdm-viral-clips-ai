@@ -378,9 +378,9 @@ def test_flujo_descartar_evento():
 # ---------------------------------------------------------------------------
 # Paso 11: versión del trabajador
 # ---------------------------------------------------------------------------
-def test_version_trabajador_1_3_4():
-    assert worker_mod.VERSION == "1.3.4", (
-        f"VERSION del trabajador debe ser «1.3.4», no «{worker_mod.VERSION}»")
+def test_version_trabajador_1_3_5():
+    assert worker_mod.VERSION == "1.3.5", (
+        f"VERSION del trabajador debe ser «1.3.5», no «{worker_mod.VERSION}»")
 
 
 # ---------------------------------------------------------------------------

@@ -211,6 +211,11 @@ function seguirEstadoGrabacion(sid, jobId, modo) {
           // «apagar» y APAGABA el radar creyendo activarlo, sin ningún
           // cambio visible para el dueño (la etiqueta quedaba igual).
           pintarBtnRadar(ses, await contarMomentos(ses.id));
+          // Los clips del radar aparecen SOLOS en el Centro LIVE mientras
+          // se graba: cada paso de seguimiento refresca la rejilla de la
+          // sesión (cargarClipsSesion lleva firma: si no hay clips nuevos
+          // ni cambios, no repinta nada).
+          cargarClipsSesion();
           if (g.modo !== "detencion") { g.modo = "vigilancia"; }
           if (g.rapido) { g.rapido = false; clearInterval(ivGrab); ivGrab = setInterval(paso, 5000); }
           return;
@@ -365,16 +370,65 @@ async function detenerGrab() {
     seguirEstadoGrabacion(sid, d.job_id, "detencion");
   } catch (e) { setLiveMsg(e.message); }
 }
-// Clips de la sesión seleccionada, dentro del Centro LIVE.
-async function cargarClipsSesion() {
+// Clips de la sesión seleccionada, dentro del Centro LIVE: rejilla visual
+// (miniatura protagonista, duración sobre la imagen y estado) que se
+// actualiza SOLA durante la grabación — seguirEstadoGrabacion la llama en
+// cada paso y la firma evita repintar cuando no cambió nada. Sin
+// miniatura se ve un marcador claro con la duración, nunca una caja rota.
+let firmaClipsSesion = "";
+async function cargarClipsSesion(forzar = false) {
   const box = $("live-clips"); if (!box) return;
   const sid = sesionId();
-  if (!sid) { box.innerHTML = `<div class="fila-clips"><h4>Clips de esta sesión</h4><span class="nota">Selecciona una sesión para ver sus clips.</span></div>`; return; }
+  if (!sid) { firmaClipsSesion = ""; box.innerHTML = `<div class="fila-clips"><h4>🎬 Clips de esta sesión</h4><span class="nota">Selecciona una sesión para ver sus clips.</span></div>`; return; }
   try { const cs = await api("GET", `/clips?session_id=${sid}`);
-    box.innerHTML = `<div class="fila-clips"><h4>Clips de esta sesión</h4>` +
-      `<button onclick="generarTodosClips()">GENERAR TODOS LOS CLIPS</button></div>` +
-      tabla(cs, [["Clip", r => "#" + r.id + " " + esc(r.title || "")], ["Duración", r => (r.duration_s ?? "—") + "s"], ["Score", r => `<span class='score'>${r.score}/100</span>`], ["Archivo/ruta", r => esc(r.file_path || "—")], ["Acciones", r => accionesClip(r, "liveclip")]]);
-  } catch (e) { box.innerHTML = `<div class="fila-clips"><h4>Clips de esta sesión</h4><span class="nota">${esc(e.message)}</span></div>`; }
+    // La caché global aprende estos clips: VER/DESCARGAR buscan ahí títulos
+    // y subtítulos del clip aunque la biblioteca no se haya abierto.
+    (cs || []).forEach(c => { const i = clipsCache.findIndex(x => x.id === c.id); if (i >= 0) clipsCache[i] = c; else clipsCache.push(c); });
+    const visibles = (cs || []).filter(c => c.status !== "descartado");
+    const firma = sid + "|" + visibles.map(c => [c.id, c.status || "", c.tiene_miniatura ? 1 : 0, c.tiene_copia_servidor ? 1 : 0].join(":")).join(",");
+    if (!forzar && firma === firmaClipsSesion) return;
+    firmaClipsSesion = firma;
+    box.innerHTML = `<div class="fila-clips"><h4>🎬 Clips de esta sesión</h4><span class="nota">${visibles.length} clip(s) — aparecen solos cuando el radar detecta un momento, sin tocar nada.</span>` +
+      `<button class="sec" onclick="generarTodosClips()">GENERAR TODOS LOS CLIPS</button></div>` +
+      (visibles.length
+        ? `<div class="biblioteca">` + visibles.map(tarjetaClipLive).join("") + `</div>`
+        : `<p class="nota">Aún no hay clips de esta sesión. Deja la grabación correr: en cuanto el radar detecte un momento, su clip aparecerá aquí solo.</p>`);
+  } catch (e) { box.innerHTML = `<div class="fila-clips"><h4>🎬 Clips de esta sesión</h4><span class="nota">${esc(e.message)}</span></div>`; }
+}
+// Tarjeta visual de un clip en el Centro LIVE: miniatura grande con la
+// duración encima, título, score y estado; VER/DESCARGAR como en la
+// biblioteca, más APROBAR (queda listo para publicar; no publica nada) y
+// RECHAZAR (sale de esta vista; el archivo sigue en la PC).
+function tarjetaClipLive(c) {
+  const dur = c.duration_s != null ? Math.round(c.duration_s) + " s" : "—";
+  const thumb = c.tiene_miniatura
+    ? `<div class="bib-thumb-wrap"><img src="/clips/${c.id}/miniatura" alt="" class="bib-thumb" loading="lazy"><span class="bib-dur">${dur}</span></div>`
+    : `<div class="bib-thumb-wrap"><div class="bib-thumb bib-sin">Sin miniatura</div><span class="bib-dur">${dur}</span></div>`;
+  const aprobado = c.status === "aprobado";
+  return `<article class="bib-card">
+    ${thumb}
+    <div class="bib-cuerpo">
+      <b>${esc(c.title || ("Clip #" + c.id))}</b>
+      <span class="nota">${dur} · <span class="score">${c.score}/100</span>${aprobado ? ` · <span class="badge badge-green">✅ APROBADO</span>` : ""}</span>
+      <div class="bib-acciones">${accionesClip(c, "liveclip")}</div>
+      <div class="bib-acciones">
+        ${aprobado ? "" : `<button type="button" onclick="aprobarClipLive(${c.id})">✅ APROBAR</button>`}
+        <button type="button" class="sec" onclick="rechazarClipLive(${c.id})">✖ RECHAZAR</button>
+      </div>
+    </div>
+  </article>`;
+}
+async function aprobarClipLive(id) {
+  try { await api("POST", `/clips/${id}/aprobar`);
+    setLiveMsg("Clip #" + id + " aprobado: queda listo para publicar (todavía no se ha publicado nada).", true);
+    cargarClipsSesion(true);
+  } catch (e) { setLiveMsg(e.message); }
+}
+async function rechazarClipLive(id) {
+  try { await api("POST", `/clips/${id}/rechazar`);
+    setLiveMsg("Clip #" + id + " rechazado: sale de esta vista; el archivo sigue en tu PC.", true);
+    cargarClipsSesion(true);
+  } catch (e) { setLiveMsg(e.message); }
 }
 function largoClip() { const el = $("clip-largo"); return el && el.value ? Number(el.value) : null; }
 async function generarTodosClips() {
@@ -458,7 +512,11 @@ function subsActivos(c) {
   if (!c) return false;
   const id = String(c.id);
   if (Object.prototype.hasOwnProperty.call(subsOn, id)) return !!subsOn[id];
-  return !!c.tiene_subtitulado;
+  // Regla de Jose: subtítulos APAGADOS por defecto. Que exista la copia
+  // subtitulada (la cola la prepara en segundo plano sin tocar el
+  // original) NO enciende nada: las letras solo se ven si ÉL activa el
+  // interruptor de ESE clip.
+  return false;
 }
 function alternarSubtitulos(id) {
   const c = clipsCache.find(x => x.id == id);
@@ -632,7 +690,7 @@ function tarjetaClip(c) {
   const cuando = String(c.created_at || "").replace("T", " ").slice(0, 16);
   const sesion = c.session_id ? ("#" + c.session_id + " " + (c.sesion_titulo || "")) : "Sin sesión";
   const estado = c.archivo_existe || c.descargable ? (c.status || "listo") : "archivo no encontrado";
-  const thumb = c.tiene_miniatura ? `<img src="/clips/${c.id}/miniatura" alt="" class="bib-thumb" loading="lazy">` : `<div class="bib-thumb bib-sin">Sin miniatura</div>`;
+  const thumb = c.tiene_miniatura ? `<div class="bib-thumb-wrap"><img src="/clips/${c.id}/miniatura" alt="" class="bib-thumb" loading="lazy"><span class="bib-dur">${c.duration_s ?? "—"} s</span></div>` : `<div class="bib-thumb bib-sin">Sin miniatura · ${c.duration_s ?? "—"} s</div>`;
   return `<article class="bib-card">
     ${thumb}
     <div class="bib-cuerpo">

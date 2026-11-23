@@ -41,6 +41,7 @@
 
     <section data-sec="centro" class="oculto">
       <h3>🔴 CENTRO DE TRANSMISIONES EN VIVO <span class="live-pill"><span class="live-dot"></span>EN VIVO</span></h3>
+      <p class="pasos">① Pega el enlace del en vivo &nbsp;→&nbsp; ② Pulsa <b>GRABAR</b> &nbsp;→&nbsp; ③ Los clips aparecen solos aquí abajo 🎬</p>
       <div class="grid2">
         <div>
           <input id="ss-titulo" placeholder="Título de la sesión (ej.: Alofoke LIVE)">
@@ -59,7 +60,7 @@
           <p id="wk-chip" class="chip">Motor: …</p>
           <div class="botones">
             <button onclick="abrirLive()">▶ ABRIR LIVE</button>
-            <button id="btn-iniciar" class="rojo" onclick="iniciarGrab()">⏺ INICIAR GRABACIÓN</button>
+            <button id="btn-iniciar" class="rojo btn-grabar" onclick="iniciarGrab()">⏺ GRABAR</button>
             <button id="btn-radar" onclick="activarRadar()">📡 ACTIVAR RADAR VIRAL <span id="radar-count"></span></button>
             <label class="nota">Duración del clip
               <select id="clip-largo">

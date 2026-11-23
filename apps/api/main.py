@@ -1556,6 +1556,30 @@ def reportar_subtitulos(data: SubtituloReporteIn, w=Depends(worker_auth), s=Depe
     return {"ok": True, "clip_id": c.id, "tiene_subtitulado": _medio_subtitulado(c) is not None or almacen_r2.es_uri(c.subtitulo_path),
             "sesion_id": c.session_id}
 
+@app.post("/clips/{cid}/aprobar")
+def aprobar_clip(cid: int, user=Depends(current_user), s=Depends(db)):
+    """Aprobar un clip = queda «listo para publicar» (status «aprobado»).
+    NO publica nada ni crea publicaciones: publicar sigue siendo un paso
+    aparte, con su propia aprobación en la sección «Publicar»."""
+    c = s.get(Clip, cid)
+    if not c: raise HTTPException(404, "Clip no encontrado")
+    if not _clip_autorizado(s, c, user): raise HTTPException(403, "No puedes aprobar un clip de otra cuenta.")
+    c.status = "aprobado"; s.commit()
+    audit(s, user.email, "aprobar_clip", f"clip {cid}")
+    return {"ok": True, "id": cid, "status": c.status}
+
+@app.post("/clips/{cid}/rechazar")
+def rechazar_clip(cid: int, user=Depends(current_user), s=Depends(db)):
+    """Rechazar un clip: queda «descartado» y sale de la vista en vivo.
+    No borra el archivo (ni en la PC ni en el servidor): eliminar del
+    todo sigue siendo DELETE /clips/{id}."""
+    c = s.get(Clip, cid)
+    if not c: raise HTTPException(404, "Clip no encontrado")
+    if not _clip_autorizado(s, c, user): raise HTTPException(403, "No puedes rechazar un clip de otra cuenta.")
+    c.status = "descartado"; s.commit()
+    audit(s, user.email, "rechazar_clip", f"clip {cid}")
+    return {"ok": True, "id": cid, "status": c.status}
+
 @app.delete("/clips/{cid}")
 def eliminar_clip(cid: int, user=Depends(current_user), s=Depends(db)):
     """Borra un clip y sus archivos. No toca la grabación completa, la sesión ni otros momentos."""

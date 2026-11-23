@@ -133,6 +133,13 @@ label{display:block;margin:8px 0}
 .bib-cuerpo b{color:#fff;font-size:15px}
 .bib-acciones{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
 .bib-acciones button{margin:0;padding:10px 12px;font-size:13px;min-height:44px}
+
+/* ---------- Centro LIVE sencillo (dirección visual 2026-11-23) ---------- */
+.btn-grabar{font-size:20px!important;padding:20px 38px!important;border-radius:16px;letter-spacing:.5px}
+.pasos{margin:2px 0 14px;padding:10px 14px;background:var(--surface);border:1px solid var(--border);border-radius:12px;color:var(--muted);font-size:14.5px}
+.pasos b{color:#fff}
+.bib-thumb-wrap{position:relative}
+.bib-dur{position:absolute;right:8px;bottom:8px;background:rgba(0,0,0,.78);color:#fff;font-size:12.5px;font-weight:800;padding:2px 9px;border-radius:999px}
 .subs-toggle{font-weight:800;letter-spacing:.3px}
 .subs-on{background:#ff2020;color:#fff;border-color:#ff2020}
 .subs-correccion{margin-top:8px;font-size:13px;color:var(--muted)}

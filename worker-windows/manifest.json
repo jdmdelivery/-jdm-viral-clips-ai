@@ -20,7 +20,7 @@
     "transcribe.py": "f2f43819d34833ec1a4f538a02944f5735b03c6a00828ee2d6228216d73167d0",
     "viral.py": "5fc32a546c762d16564c7ae040570c023004cf10e3b4910d15bc76b00734888c",
     "vision.py": "a57c2b142ba15ab12b61b3fe4c283c73a0048ec78db9e3da7c07519cbc5d37a0",
-    "worker.py": "570b62ac1892065f8d36c503e22104b09ccce67fae9440bae05a73d80db2ed77"
+    "worker.py": "36c989400afa357feb3eaa724c15a820523e6b1f7005e598ca8be03c2d0e8e87"
   },
-  "version": "1.3.4"
+  "version": "1.3.5"
 }
