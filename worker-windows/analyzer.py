@@ -15,7 +15,7 @@ def duracion(path):
                         "-of", "csv=p=0", str(path)], capture_output=True, text=True, timeout=60, creationflags=SIN_VENTANA)
     return float(r.stdout.strip())
 
-def analizar_video(fuente, outdir, modo="general", pre_s=20, post_s=15,
+def analizar_video(fuente, outdir, modo="general", pre_s=30, post_s=25,
                    umbral_evento=45, max_clips=1, con_transcripcion=False,
                    con_rostros=False):
     t0 = time.time()

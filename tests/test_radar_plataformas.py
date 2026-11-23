@@ -13,7 +13,7 @@ Parte 2 — radar en vivo:
   trabajador POST /workers/sessions/{id}/live-events con dedup >70%,
   GET /events?session_id=.
 - Humo e2e: sesión + señal HLS local «en vivo» (productor -re); SIN detener
-  la grabación aparecen eventos en la API y un clip 1080x1920 de 30–120 s;
+  la grabación aparecen eventos en la API y un clip 1080x1920 de 60–120 s;
   al detener se crea el Project y el radar termina."""
 import json
 import subprocess
@@ -288,9 +288,11 @@ def test_ingesta_requiere_token_de_trabajador():
 
 # ---------- Parte 2: humo e2e del radar en vivo ----------
 def _video_radar(path):
-    """75 s: 0–10 tranquilo · 10–40 FUERTE (colores cada 5 s + audio en
-    ráfagas 1 s sí / 1 s no) · 40–75 tranquilo. Keyframes densos para que el
-    productor HLS por copia pueda cortar segmentos."""
+    """110 s: 0–30 tranquilo · 30–60 FUERTE (colores cada 5 s + audio en
+    ráfagas 1 s sí / 1 s no) · 60–110 tranquilo. Keyframes densos para que el
+    productor HLS por copia pueda cortar segmentos. El momento va en el
+    medio para que su clip cumpla la regla de Jose de 60–120 s (v1.3.6)
+    con el contexto real disponible durante la grabación."""
     tmp = Path(path).parent
     enc = ["-c:v", "libx264", "-g", "30", "-keyint_min", "30", "-sc_threshold", "0",
            "-pix_fmt", "yuv420p", "-c:a", "aac"]
@@ -298,8 +300,8 @@ def _video_radar(path):
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
         assert r.returncode == 0, r.stderr[-500:]
     q1 = tmp / "rq1.mp4"
-    run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i", "color=c=blue:size=640x360:duration=10",
-         "-f", "lavfi", "-i", "sine=frequency=440:duration=10", "-af", "volume=0.02",
+    run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i", "color=c=blue:size=640x360:duration=30",
+         "-f", "lavfi", "-i", "sine=frequency=440:duration=30", "-af", "volume=0.02",
          "-shortest", *enc, str(q1)])
     partes_v = []
     for i, c in enumerate(("red", "green", "yellow", "white", "magenta", "cyan")):
@@ -317,8 +319,8 @@ def _video_radar(path):
          "-f", "lavfi", "-i", r"aevalsrc=0.85*sin(2*PI*440*t)*lt(mod(t\,2)\,1):s=44100:d=30",
          "-map", "0:v", "-map", "1:a", "-shortest", *enc, str(fuerte)])
     q2 = tmp / "rq2.mp4"
-    run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i", "color=c=green:size=640x360:duration=35",
-         "-f", "lavfi", "-i", "sine=frequency=330:duration=35", "-af", "volume=0.02",
+    run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi", "-i", "color=c=green:size=640x360:duration=50",
+         "-f", "lavfi", "-i", "sine=frequency=330:duration=50", "-af", "volume=0.02",
          "-shortest", *enc, str(q2)])
     lista2 = tmp / "rlista2.txt"
     lista2.write_text("".join(f"file '{p.name}'\n" for p in (q1, fuerte, q2)))
@@ -363,7 +365,7 @@ def test_radar_en_vivo_e2e(tmp_path):
     puerto = srv.server_address[1]
     cfg = {"carpeta_grabaciones": str(tmp_path / "grabaciones"),
            "carpeta_clips": str(tmp_path / "clips"),
-           "pre_s": 20, "post_s": 15, "radar_umbral": 45, "radar_intervalo_s": 3}
+           "pre_s": 30, "post_s": 25, "radar_umbral": 45, "radar_intervalo_s": 3}
     try:
         for _ in range(60):
             if (hls_dir / "live.m3u8").exists(): break
@@ -397,7 +399,7 @@ def test_radar_en_vivo_e2e(tmp_path):
         st = datos["streams"][0]
         assert (st["width"], st["height"]) == (1080, 1920)
         dur = float(datos["format"]["duration"])
-        assert 30 <= dur <= 120, f"duración del clip fuera de la regla 30–120: {dur}"
+        assert 60 <= dur <= 120, f"duración del clip fuera de la regla 60–120: {dur}"
         latencia = Path(clip["file_path"]).stat().st_mtime - (t_rec + ev["end_s"])
         print(f"\nRADAR E2E: evento {ev['start_s']}–{ev['end_s']}s score {ev['score']}; "
               f"clip {dur:.1f}s 1080x1920; latencia momento->clip ≈ {latencia:.1f}s")

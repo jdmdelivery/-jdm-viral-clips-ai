@@ -844,8 +844,8 @@ def _sesion_publica(s, row):
     return d
 def _largo_clip(largo_s):
     if largo_s is None: return None
-    if int(largo_s) not in (3, 5, 10, 15, 20):
-        raise HTTPException(400, "La duración del clip debe ser 3, 5, 10, 15 o 20 segundos, o vacía para automática.")
+    if int(largo_s) not in (60, 75, 90, 120):
+        raise HTTPException(400, "La duración del clip debe ser 60, 75, 90 o 120 segundos, o vacía para automática.")
     return int(largo_s)
 
 # Sesiones LIVE y fuentes
@@ -2112,7 +2112,7 @@ def put_autopilot(data: AutopilotIn, user=Depends(current_user), s=Depends(db)):
     return cfg
 @app.get("/config")
 def get_config(user=Depends(current_user), s=Depends(db)):
-    base = {"buffer_min": 5, "pre_s": 20, "post_s": 15, "min_score_alert": 80,
+    base = {"buffer_min": 5, "pre_s": 30, "post_s": 25, "min_score_alert": 80,
             "timezone": "America/Santo_Domingo", "subtitles_default": False}
     for row in s.query(Config).all():
         try: base[row.key] = json.loads(row.value)

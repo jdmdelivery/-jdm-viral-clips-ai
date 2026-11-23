@@ -7,9 +7,10 @@ from procesos import SIN_VENTANA
 
 FORMATOS = {"9:16": (1080, 1920), "16:9": (1920, 1080), "1:1": (1080, 1080)}
 
-# Regla de Jose (2026-11-14): todo corte dura entre 30 y 120 segundos,
+# Regla de Jose (2026-11-14, ajustada el 2026-11-23: «tiene que hacer
+# short de un minuto y más»): todo corte dura entre 60 y 120 segundos,
 # «depende» del momento. Ver contexto().
-MIN_CLIP_S = 30.0
+MIN_CLIP_S = 60.0
 MAX_CLIP_S = 120.0
 
 def exportar_clip(fuente, inicio_s, fin_s, salida, formato="9:16", subtitulos=False, srt=None):
@@ -39,10 +40,10 @@ def miniatura(fuente, segundo, salida):
                        capture_output=True, text=True, timeout=120, creationflags=SIN_VENTANA)
     return str(salida) if r.returncode == 0 and Path(salida).exists() else None
 
-LARGOS_ELEGIBLES = (3, 5, 10, 15, 20)
+LARGOS_ELEGIBLES = (60, 75, 90, 120)
 
-def ventana_solicitada(evento_inicio, evento_fin, duracion_total, largo_s=None, pre_s=20, post_s=15):
-    """Si largo_s es 3, 5, 10, 15 o 20, el clip dura eso (centrado en el momento
+def ventana_solicitada(evento_inicio, evento_fin, duracion_total, largo_s=None, pre_s=30, post_s=25):
+    """Si largo_s es 60, 75, 90 o 120, el clip dura eso (centrado en el momento
     y recortado al video real). Si no, se usa la ventana automática de contexto()."""
     if largo_s in LARGOS_ELEGIBLES:
         total = float(duracion_total)
@@ -69,13 +70,13 @@ def clip_tiene_video(path):
     except Exception:
         return False
 
-def contexto(evento_inicio, evento_fin, duracion_total, pre_s=20, post_s=15):
+def contexto(evento_inicio, evento_fin, duracion_total, pre_s=30, post_s=25):
     """Ventana del clip: el evento con pre_s de contexto antes y post_s después,
-    ajustada a la regla de duración de Jose (30–120 s «depende» del momento):
-    - Si el video completo dura menos de 30 s, el clip es el video entero
+    ajustada a la regla de duración de Jose (60–120 s «depende» del momento):
+    - Si el video completo dura menos de 60 s, el clip es el video entero
       (no se inventa duración que no existe).
-    - Ventana base = evento + pre + post. Si queda por debajo de 30 s, se
-      extiende primero por el post y luego por el pre hasta llegar a 30 s
+    - Ventana base = evento + pre + post. Si queda por debajo de 60 s, se
+      extiende primero por el post y luego por el pre hasta llegar a 60 s
       o agotar el video.
     - Si se pasa de 120 s, se recorta primero el post, luego el pre y por
       último la cola del evento; el inicio del evento nunca se mueve."""

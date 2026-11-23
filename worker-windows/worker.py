@@ -5,7 +5,7 @@ Uso: python worker.py --config worker-config.json   (ver README.md)"""
 import argparse, json, os, subprocess, sys, threading, time
 from pathlib import Path
 
-VERSION = "1.3.5"
+VERSION = "1.3.7"
 sys.path.insert(0, str(Path(__file__).parent))
 from procesos import SIN_VENTANA
 import instancia
@@ -23,7 +23,7 @@ def _activar_radar(sid, rec, cfg, api, modo="general"):
     radar = RadarSesion(rec, sid, api, Path(cfg["carpeta_clips"]), modo=modo,
                         umbral=int(cfg.get("radar_umbral", 80)),
                         intervalo_s=float(cfg.get("radar_intervalo_s", 30)),
-                        pre_s=cfg.get("pre_s", 20), post_s=cfg.get("post_s", 15))
+                        pre_s=cfg.get("pre_s", 30), post_s=cfg.get("post_s", 25))
     radar.start(); radares[sid] = radar
     return radar
 
@@ -124,7 +124,7 @@ def procesar(job, cfg, api=None):
     if tipo == "analizar_video":
         salida = Path(cfg["carpeta_clips"]) / f"proyecto-{p.get('project_id', 'x')}"
         r = analizar_video(resolver_archivo(p, cfg, api), salida, modo=p.get("mode", "general"),
-                           pre_s=cfg.get("pre_s", 20), post_s=cfg.get("post_s", 15),
+                           pre_s=cfg.get("pre_s", 30), post_s=cfg.get("post_s", 25),
                            max_clips=p.get("max_clips", 3))
         return {"events": [{"type": e["type"], "mode": e["mode"], "start_s": e["start_s"],
                             "end_s": e["end_s"], "score": e["score"], "breakdown": e["breakdown"]} for e in r["eventos"]],
@@ -148,7 +148,7 @@ def procesar(job, cfg, api=None):
         fuente = resolver_archivo(p, cfg, api)
         total = duracion(fuente)
         ini, fin = ventana_solicitada(float(p["start_s"]), float(p["end_s"]), total,
-                                      p.get("largo_s"), cfg.get("pre_s", 20), cfg.get("post_s", 15))
+                                      p.get("largo_s"), cfg.get("pre_s", 30), cfg.get("post_s", 25))
         carpeta = (f"proyecto-{p['project_id']}" if p.get("project_id")
                    else f"sesion-{p['session_id']}" if p.get("session_id") else "eventos")
         salida = Path(cfg["carpeta_clips"]) / carpeta / f"clip-evento-{p.get('event_id', 'x')}.mp4"

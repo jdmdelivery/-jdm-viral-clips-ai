@@ -8,7 +8,7 @@ rechazar por clip sin publicar nada) + su regla de subtítulos.
 
 1. Radar: con la grabación en curso y SIN ningún clic más, al cerrarse
    una ventana sobre el umbral el clip se genera y se guarda solo
-   (archivo + miniatura + título, duración 30–120 s, subtítulos NO), y
+   (archivo + miniatura + título, duración 60–120 s, subtítulos NO), y
    al llegar otro momento sale OTRO clip: no hay que pedirlos.
 2. API: POST /clips/{id}/aprobar deja el clip «listo para publicar»
    (status aprobado) SIN crear ninguna publicación; /rechazar lo marca
@@ -120,8 +120,13 @@ class _ApiFalsa:
 
 
 def test_radar_saca_clips_solo_y_sigue_sacando(tmp_path):
+    # 120 s de «grabación»: momento fuerte de 2 segmentos (40–60) y otro
+    # de 1 segmento (80–90). Se usa el pre/post DE FÁBRICA del radar
+    # (30/25): con la regla de Jose (60–120 s desde la v1.3.6) los clips
+    # típicos caen en 65–70 s.
     segs = tmp_path / "segs"; segs.mkdir()
-    nombres = ["q0", "f1", "q2", "q3", "f4", "q5", "q6"]
+    nombres = ["q0", "q1", "q2", "q3", "f4", "f5",
+               "q6", "q7", "f8", "q9", "q10", "q11"]
     for i, n in enumerate(nombres):
         p = segs / f"{n}.mp4"
         if n.startswith("f"): _seg_fuerte(p, tmp_path)
@@ -129,7 +134,7 @@ def test_radar_saca_clips_solo_y_sigue_sacando(tmp_path):
     rec = _RecorderFalso()
     api = _ApiFalsa()
     radar = RadarSesion(rec, 7, api, tmp_path / "clips",
-                        umbral=40, intervalo_s=1, pre_s=20, post_s=15)
+                        umbral=40, intervalo_s=1)
 
     def meter(i):
         rec.buffer.entradas.append({"indice": i, "inicio_s": i * 10.0,
@@ -138,17 +143,23 @@ def test_radar_saca_clips_solo_y_sigue_sacando(tmp_path):
 
     # La grabación «avanza»: el bucle del radar solo llama a pasada().
     # Nadie pide clips: tienen que salir solos al cerrarse cada ventana.
-    meter(0); meter(1); meter(2)
-    radar.pasada()                       # puntúa q0 y f1: ventana abierta
+    meter(0); meter(1); meter(2); meter(3); meter(4); meter(5)
+    radar.pasada()                       # puntúa q0–q3 y f4: ventana abierta
     assert api.reportes == []            # aún no se cierra: nada que guardar
-    meter(3)
-    radar.pasada()                       # q2 flojo cierra la ventana -> clip 1
-    assert len(api.reportes) == 1
-    meter(4); meter(5)
-    radar.pasada()                       # q3 flojo, f4 abre otra ventana
-    assert len(api.reportes) == 1
     meter(6)
-    radar.pasada()                       # q5 flojo la cierra -> clip 2
+    radar.pasada()                       # f5 alarga la ventana (40–60)
+    assert api.reportes == []
+    meter(7)
+    radar.pasada()                       # q6 flojo la cierra -> clip 1 (70 s)
+    assert len(api.reportes) == 1
+    meter(8)
+    radar.pasada()                       # q7 flojo, sin ventana
+    assert len(api.reportes) == 1
+    meter(9)
+    radar.pasada()                       # f8 abre otra ventana (80–90)
+    assert len(api.reportes) == 1
+    meter(10); meter(11)
+    radar.pasada()                       # q9 flojo la cierra -> clip 2 (65 s)
     assert len(api.reportes) == 2, "el radar no siguió sacando clips solo"
 
     clips = [c for _, cs in api.reportes for c in cs]
@@ -157,8 +168,8 @@ def test_radar_saca_clips_solo_y_sigue_sacando(tmp_path):
         ruta = Path(clip["file_path"])
         assert ruta.exists(), f"el clip no quedó guardado: {ruta}"
         dur = _ffprobe_duracion(ruta)
-        assert 30 <= dur <= 120, f"duración fuera de la regla 30–120: {dur}"
-        assert 30 <= clip["duration_s"] <= 120
+        assert 60 <= dur <= 120, f"duración fuera de la regla 60–120: {dur}"
+        assert 60 <= clip["duration_s"] <= 120
         assert clip["title"], "el clip automático debe llevar título"
         assert clip["subtitles"] is False, "el clip automático sale SIN subtítulos"
         thumb = Path(clip["thumb_path"])
@@ -250,7 +261,7 @@ def test_panel_centro_live_visual_y_auto():
     assert "cargarClipsSesion()" in cuerpo
     assert "firmaClipsSesion" in appjs
     # Botón protagonista GRABAR y pasos explicados en la propia pantalla.
-    assert 'id="btn-iniciar" class="rojo btn-grabar"' in index and "⏺ GRABAR" in index
+    assert 'id="btn-grabar" class="btn-grabar"' in index and "⏺ GRABAR" in index
     assert 'class="pasos"' in index and "Los clips aparecen solos" in index
     assert ".btn-grabar" in css and ".bib-dur" in css and ".pasos" in css
     # Subtítulos APAGADOS por defecto en el panel: que exista la copia

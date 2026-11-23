@@ -1,5 +1,5 @@
 """Fixes del uso real del panel (reporte de Jose, 2026-11-14):
-- clipper.contexto: todo corte dura 30–120 s (regla de Jose).
+- clipper.contexto: todo corte dura 60–120 s (regla de Jose, 2026-11-23).
 - worker: rama «generar_clip» (antes los jobs se reclamaban y fallaban).
 - API: detener_grabacion registra la grabación como Project (una sola vez).
 - Redes: /auth/{plat}/conectar?formato=json -> 400 honesto sin credenciales.
@@ -56,8 +56,10 @@ def _completar(wh, job_id, result):
 
 
 def _video_con_evento(path):
-    """40 s: 10 s tranquilo + 20 s fuerte (4 colores) + 10 s tranquilo,
-    con los cortes alineados a los segmentos de 10 s del analizador."""
+    """100 s: 30 s tranquilo + 40 s fuerte (8 piezas de 5 s) + 30 s
+    tranquilo, con los cortes alineados a los segmentos de 10 s del
+    analizador. La fuente dura ≥ 100 s para que todo clip pueda cumplir
+    la regla de Jose de 60–120 s sin inventar duración."""
     tmp = Path(path).parent
     partes = []
     quieto = tmp / "q.mp4"
@@ -67,8 +69,8 @@ def _video_con_evento(path):
                     "-af", "volume=0.02", "-shortest", "-c:v", "libx264",
                     "-pix_fmt", "yuv420p", "-c:a", "aac", str(quieto)],
                    check=True, capture_output=True, timeout=120)
-    partes.append(quieto)
-    for i, c in enumerate(("red", "green", "yellow", "white")):
+    partes += [quieto, quieto, quieto]
+    for i, c in enumerate(("red", "green", "yellow", "white") * 2):
         p = tmp / f"f{i}.mp4"
         subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi",
                         "-i", f"color=c={c}:size=640x360:duration=5",
@@ -77,7 +79,7 @@ def _video_con_evento(path):
                         "-pix_fmt", "yuv420p", "-c:a", "aac", str(p)],
                        check=True, capture_output=True, timeout=120)
         partes.append(p)
-    partes.append(quieto)
+    partes += [quieto, quieto, quieto]
     lista = tmp / "lista.txt"
     lista.write_text("".join(f"file '{p.name}'\n" for p in partes))
     subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "concat", "-safe", "0",
@@ -89,7 +91,7 @@ def _video_con_evento(path):
 def _cfg(tmp_path):
     return {"carpeta_clips": str(tmp_path / "clips"),
             "carpeta_grabaciones": str(tmp_path / "grab"),
-            "pre_s": 20, "post_s": 15}
+            "pre_s": 30, "post_s": 25}
 
 
 def _proyectos_por_ruta(ruta):
@@ -103,11 +105,11 @@ def _proyectos_por_ruta(ruta):
 
 
 # ---------- C: duración de contexto() ----------
-def test_contexto_evento_corto_se_extiende_a_30():
+def test_contexto_evento_corto_se_extiende_a_60():
     ini, fin = contexto(2, 6, 300)          # evento de 4 s pegado al inicio
-    assert ini == 0.0 and fin - ini == 30.0
+    assert ini == 0.0 and fin - ini == 60.0
     ini, fin = contexto(294, 298, 300)      # evento de 4 s pegado al final
-    assert fin == 300.0 and fin - ini == 30.0
+    assert fin == 300.0 and fin - ini == 60.0
 
 
 def test_contexto_evento_largo_se_recorta_a_120_desde_su_inicio():
@@ -119,11 +121,13 @@ def test_contexto_evento_largo_se_recorta_a_120_desde_su_inicio():
 def test_contexto_video_mas_corto_que_el_minimo_es_el_video_entero():
     ini, fin = contexto(5, 10, 20)
     assert (ini, fin) == (0.0, 20.0)
+    ini, fin = contexto(5, 10, 45)          # 45 s < 60: tampoco se inventa
+    assert (ini, fin) == (0.0, 45.0)
 
 
-def test_contexto_clasico_dentro_de_rango_no_cambia():
-    ini, fin = contexto(50, 60, 300, 20, 15)  # el caso histórico: 45,0 s
-    assert (ini, fin) == (30.0, 75.0)
+def test_contexto_ventana_en_banda_no_cambia():
+    ini, fin = contexto(50, 90, 300, 20, 15)  # 40 s de evento + 35 de contexto
+    assert (ini, fin) == (30.0, 105.0)
     assert MIN_CLIP_S <= fin - ini <= MAX_CLIP_S
 
 

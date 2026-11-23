@@ -7,7 +7,7 @@ puntúa cada ventana con viral.py (audio/escena; la conversación solo «si
 aplica» — transcribir cada 10 s en vivo no es viable y no se finge) y,
 cuando un momento supera el umbral (config radar_umbral, defecto 80):
 
-  1. genera su clip con clipper.contexto (regla 30–120 s, 9:16, SIN
+  1. genera su clip con clipper.contexto (regla 60–120 s, 9:16, SIN
      subtítulos) desde los segmentos ya cerrados, SIN detener la grabación;
   2. reporta evento+clip a la API (POST /workers/sessions/{id}/live-events),
      que además deduplica por solape >70% contra lo ya guardado.
@@ -27,7 +27,7 @@ from dedup import _solape_ratio
 
 class RadarSesion:
     def __init__(self, recorder, session_id, api, carpeta_clips, modo="general",
-                 umbral=80, intervalo_s=30, pre_s=20, post_s=15):
+                 umbral=80, intervalo_s=30, pre_s=30, post_s=25):
         self.recorder = recorder          # Recorder en curso (NO se detiene)
         self.session_id = session_id
         self.api = api                    # ApiClient o compatible (reportar_en_vivo)
