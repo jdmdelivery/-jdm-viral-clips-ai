@@ -13,14 +13,14 @@
     "radar.py": "8efa816ed586771ff1a79845adf795f97d3d6abd7a8b18403b0ae2ff03ed9158",
     "recorder.py": "a2def7792dfddc6eef12d63db2611955cafa9f8fcaec1bc8f96c7ecb3f795154",
     "requirements.txt": "ac30d731b1cc532e45a2df0ba9c065375592e66de867fbc6ea6c0c67fefca940",
-    "resolver.py": "2e03fe10b6b6fb6fcc225e50fb64d686c70ab920eed9747c3462d5c11bea22fc",
+    "resolver.py": "4f35f25fea386e341c847192d5f0f1ba86120f8e56c899ccb0936dd422cb7dc5",
     "subtitulos.py": "00436c76593faeb99923c38c930a0255792fd8c707aaf6c6151bc1e92eb179eb",
     "sync.py": "bdb8c03c2563ba05ddb5723d0081b98350150b9195ecbe10c440bad95453a178",
     "titles.py": "dd7c4f1e8d25ce7bb81480212f0cd633a4ac3ef9a019fcda2178f49515b80b2d",
     "transcribe.py": "f2f43819d34833ec1a4f538a02944f5735b03c6a00828ee2d6228216d73167d0",
     "viral.py": "5fc32a546c762d16564c7ae040570c023004cf10e3b4910d15bc76b00734888c",
     "vision.py": "a57c2b142ba15ab12b61b3fe4c283c73a0048ec78db9e3da7c07519cbc5d37a0",
-    "worker.py": "e08493917799d6fbfee46403a3152cac047f620cfc1671c079e082523d56bc4a"
+    "worker.py": "93feedec5947d7ea4f82c4a636acc49cb9afdb9a64c7d72c115b74ed0bc49218"
   },
-  "version": "1.3.7"
+  "version": "1.3.8"
 }

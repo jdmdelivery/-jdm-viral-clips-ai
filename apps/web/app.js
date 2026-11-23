@@ -123,12 +123,12 @@ async function cargarMotor() {
     motorConectado = !!vivo;
     chip.textContent = vivo ? "🟢 Motor conectado" + (vivo.version ? " v" + vivo.version : "") : "🔴 TRABAJADOR DESCONECTADO";
     chip.className = "chip " + (vivo ? "chip-ok" : "chip-off");
-    const btn = $("btn-grabar"); if (btn) btn.disabled = !vivo;
+    const btn = $("btn-iniciar"); if (btn) btn.disabled = !vivo;
     if (!vivo && ultimoEstadoMotor !== false) setLiveMsg("Sin trabajador conectado no se puede grabar: el trabajo quedaría pendiente.", true);
     ultimoEstadoMotor = motorConectado;
   } catch (e) { motorConectado = false;
     chip.textContent = "🔴 TRABAJADOR DESCONECTADO"; chip.className = "chip chip-off";
-    const btn = $("btn-grabar"); if (btn) btn.disabled = true;
+    const btn = $("btn-iniciar"); if (btn) btn.disabled = true;
     if (ultimoEstadoMotor !== false) setLiveMsg("Sin trabajador conectado no se puede grabar: el trabajo quedaría pendiente.", true);
     ultimoEstadoMotor = false;
   }
@@ -138,21 +138,12 @@ async function contarMomentos(sid) {
   try { const ev = await api("GET", `/events?session_id=${sid}`); return Array.isArray(ev) ? ev.length : null; }
   catch (e) { return null; }
 }
-// El radar es AUTOMÁTICO (entra solo con la grabación): en la vista
-// principal se muestra como línea de estado pequeña NO clicable
-// (#radar-estado). El botón-toggle sigue existiendo dentro de «Más
-// opciones» para quien quiera apagarlo/encenderlo a mano, y su etiqueta
-// se repinta con el mismo estado fresco.
 function pintarBtnRadar(ses, nMomentos) {
+  const btn = $("btn-radar"); if (!btn) return;
   const cuenta = (nMomentos === null || nMomentos === undefined) ? "" : ` — ${nMomentos} momentos`;
   let etiqueta = "📡 ACTIVAR RADAR VIRAL";
-  let linea = "📡 Radar apagado" + cuenta;
-  if (ses && ses.radar_activo) {
-    etiqueta = ses.radar_sin_fuente ? "📡 RADAR SIN FUENTE" : "📡 RADAR ANALIZANDO — DESACTIVAR";
-    linea = ses.radar_sin_fuente ? "📡 Radar sin fuente" : "📡 Radar analizando" + cuenta.replace(" — ", " · ");
-  }
-  const btn = $("btn-radar"); if (btn) btn.innerHTML = etiqueta + ` <span id="radar-count">${esc(cuenta)}</span>`;
-  const lin = $("radar-estado"); if (lin) lin.textContent = linea;
+  if (ses && ses.radar_activo) etiqueta = ses.radar_sin_fuente ? "📡 RADAR SIN FUENTE" : "📡 RADAR ANALIZANDO — DESACTIVAR";
+  btn.innerHTML = etiqueta + ` <span id="radar-count">${esc(cuenta)}</span>`;
 }
 async function refrescarRadarUI(ses) {
   const sid = ses ? ses.id : sesionId();
@@ -169,23 +160,7 @@ function textoConBytes(base, el) {
   const n = Number(el && el.dataset.bytes || 0);
   return n > 0 ? base + " · " + fmtMB(n) : base;
 }
-// UNA sola acción principal en el Centro LIVE (rediseño 2026-11-23):
-// el botón enorme es GRABAR y, mientras la sesión graba, el MISMO botón
-// pasa a DETENER. La etiqueta se repinta con el estado fresco de la
-// sesión en cada pintarEstadoReal/seguimiento, nunca queda vieja.
-let grabandoAhora = false;
-function pintarBtnGrabar(ses) {
-  grabandoAhora = !!(ses && (ses.status === "grabando" || ses.status === "iniciando" || ses.status === "deteniendo"));
-  const btn = $("btn-grabar"); if (!btn) return;
-  btn.textContent = grabandoAhora ? "⏹ DETENER" : "⏺ GRABAR";
-  btn.classList.toggle("grabando-on", grabandoAhora);
-}
-async function botonGrabar() {
-  if (grabandoAhora) return detenerGrab();
-  return iniciarGrab();
-}
 function pintarEstadoReal(ses) {
-  pintarBtnGrabar(ses);
   const el = $("live-estado"); if (!el) return;
   if (!ses || !ses.estado_real) { el.classList.add("oculto"); el.classList.remove("grabando", "estado-error"); el.textContent = ""; return; }
   el.classList.remove("oculto");
@@ -280,7 +255,7 @@ function seguirEstadoGrabacion(sid, jobId, modo) {
 }
 // Restaura distintivo/contador/poll según el estado REAL de la sesión seleccionada.
 function restaurarEstadoGrabacion(ses) {
-  if (!ses) { ocultarGrabando(); pararSeguimientoGrab(); pintarBtnGrabar(null); return; }
+  if (!ses) { ocultarGrabando(); pararSeguimientoGrab(); return; }
   const yaSigue = grabEnCurso && grabEnCurso.sid === String(ses.id);
   if (ses.status === "grabando") { mostrarGrabando(ses); if (!yaSigue) seguirEstadoGrabacion(ses.id, null, "vigilancia"); }
   else if (ses.status === "iniciando") { pintarEstadoReal(ses); if (!yaSigue) seguirEstadoGrabacion(ses.id, null, "inicio"); }
@@ -315,7 +290,7 @@ function sesionId() {
 async function cargarSesion() {
   const elegida = $("ss-lista") && $("ss-lista").value;
   if (elegida) recordarSesion(elegida);
-  const sid = sesionId(); if (!sid) { ocultarGrabando(); pararSeguimientoGrab(); pintarBtnRadar(null, null); pintarBtnGrabar(null); cargarClipsSesion(); return; }
+  const sid = sesionId(); if (!sid) { ocultarGrabando(); pararSeguimientoGrab(); pintarBtnRadar(null, null); cargarClipsSesion(); return; }
   try { const ss = await api("GET", "/sessions");
     const sel = (ss || []).find(s => String(s.id) === String(sid)) || null;
     restaurarEstadoGrabacion(sel);
@@ -413,17 +388,17 @@ async function cargarClipsSesion(forzar = false) {
     const firma = sid + "|" + visibles.map(c => [c.id, c.status || "", c.tiene_miniatura ? 1 : 0, c.tiene_copia_servidor ? 1 : 0].join(":")).join(",");
     if (!forzar && firma === firmaClipsSesion) return;
     firmaClipsSesion = firma;
-    box.innerHTML = `<div class="fila-clips"><h4>🎬 Clips de esta sesión</h4><span class="nota">${visibles.length} clip(s) — aparecen solos cuando el radar detecta un momento, sin tocar nada.</span></div>` +
+    box.innerHTML = `<div class="fila-clips"><h4>🎬 Clips de esta sesión</h4><span class="nota">${visibles.length} clip(s) — aparecen solos cuando el radar detecta un momento, sin tocar nada.</span>` +
+      `<button class="sec" onclick="generarTodosClips()">GENERAR TODOS LOS CLIPS</button></div>` +
       (visibles.length
         ? `<div class="biblioteca">` + visibles.map(tarjetaClipLive).join("") + `</div>`
         : `<p class="nota">Aún no hay clips de esta sesión. Deja la grabación correr: en cuanto el radar detecte un momento, su clip aparecerá aquí solo.</p>`);
   } catch (e) { box.innerHTML = `<div class="fila-clips"><h4>🎬 Clips de esta sesión</h4><span class="nota">${esc(e.message)}</span></div>`; }
 }
-// Tarjeta visual de un clip en el Centro LIVE (rediseño 2026-11-23):
-// miniatura grande con la duración encima, título y score; solo dos
-// acciones grandes, ▶ VER y ⬇ GUARDAR. APROBAR (queda listo para
-// publicar; no publica nada) y RECHAZAR (sale de esta vista; el archivo
-// sigue en la PC) quedan como enlaces pequeños secundarios.
+// Tarjeta visual de un clip en el Centro LIVE: miniatura grande con la
+// duración encima, título, score y estado; VER/DESCARGAR como en la
+// biblioteca, más APROBAR (queda listo para publicar; no publica nada) y
+// RECHAZAR (sale de esta vista; el archivo sigue en la PC).
 function tarjetaClipLive(c) {
   const dur = c.duration_s != null ? Math.round(c.duration_s) + " s" : "—";
   const thumb = c.tiene_miniatura
@@ -435,10 +410,10 @@ function tarjetaClipLive(c) {
     <div class="bib-cuerpo">
       <b>${esc(c.title || ("Clip #" + c.id))}</b>
       <span class="nota">${dur} · <span class="score">${c.score}/100</span>${aprobado ? ` · <span class="badge badge-green">✅ APROBADO</span>` : ""}</span>
-      <div class="bib-acciones clip-main">${accionesClip(c, "liveclip")}</div>
-      <div class="bib-mini">
-        ${aprobado ? "" : `<a href="#" onclick="aprobarClipLive(${c.id});return false">Aprobar</a>`}
-        <a href="#" onclick="rechazarClipLive(${c.id});return false">Rechazar</a>
+      <div class="bib-acciones">${accionesClip(c, "liveclip")}</div>
+      <div class="bib-acciones">
+        ${aprobado ? "" : `<button type="button" onclick="aprobarClipLive(${c.id})">✅ APROBAR</button>`}
+        <button type="button" class="sec" onclick="rechazarClipLive(${c.id})">✖ RECHAZAR</button>
       </div>
     </div>
   </article>`;
@@ -590,18 +565,18 @@ async function guardarTextoSubtitulos(id) {
     await cargarClips();
   } catch (e) { if ($("clips-msg")) $("clips-msg").textContent = e.message; }
 }
-// Acciones de un clip (▶ VER / ⬇ GUARDAR) compartidas por «Clips generados»
+// Acciones de un clip (VER / DESCARGAR) compartidas por «Clips generados»
 // (prefijo "clip") y los clips de sesión del Centro LIVE (prefijo
 // "liveclip"): los contenedores de estado/video llevan el prefijo para no
-// chocar entre secciones. VER y GUARDAR usan la COPIA que el trabajador
+// chocar entre secciones. VER y DESCARGAR usan la COPIA que el trabajador
 // sube al servidor; sin copia, piden la subida y esperan.
 function accionesClip(r, prefijo) {
   const ver = r.tiene_copia_servidor
-    ? `<button onclick="verClip(${r.id}, '${prefijo}')">▶ VER</button>`
-    : `<button onclick="pedirCopia(${r.id}, 'ver', '${prefijo}')">▶ VER</button>`;
+    ? `<button onclick="verClip(${r.id}, '${prefijo}')">VER</button>`
+    : `<button onclick="pedirCopia(${r.id}, 'ver', '${prefijo}')">VER</button>`;
   const bajar = r.tiene_copia_servidor
-    ? `<button onclick="descargarCopia(${r.id})">⬇ GUARDAR</button>`
-    : `<button onclick="pedirCopia(${r.id}, 'descargar', '${prefijo}')">⬇ GUARDAR</button>`;
+    ? `<button onclick="descargarCopia(${r.id})">DESCARGAR</button>`
+    : `<button onclick="pedirCopia(${r.id}, 'descargar', '${prefijo}')">DESCARGAR</button>`;
   return ver + " " + bajar +
     `<span id="${prefijo}-estado-${r.id}" class="nota"></span><div id="${prefijo}-video-${r.id}"></div>`;
 }

@@ -135,7 +135,7 @@ def test_fuente_plataforma_se_puede_iniciar():
 
 # ---------- Parte 1: resolver del trabajador ----------
 def test_resolver_directa_tal_cual_sin_ytdlp(monkeypatch):
-    def prohibido(url):
+    def prohibido(url, *args):
         raise AssertionError("yt-dlp no debe llamarse para señales directas")
     monkeypatch.setattr(resolver, "_ejecutar_ytdlp", prohibido)
     assert resolver.resolver_fuente("https://cdn.example.com/live.m3u8") == "https://cdn.example.com/live.m3u8"
@@ -145,41 +145,41 @@ def test_resolver_directa_tal_cual_sin_ytdlp(monkeypatch):
 
 def test_resolver_pagina_youtube_devuelve_senal(monkeypatch):
     monkeypatch.setattr(resolver, "_ejecutar_ytdlp",
-                        lambda url: (0, "https://rr5.googlevideo.com/videoplayback?expire=1\n", ""))
+                        lambda url, *args: (0, "https://rr5.googlevideo.com/videoplayback?expire=1\n", ""))
     assert resolver.resolver_fuente("https://www.youtube.com/watch?v=abc") == \
         "https://rr5.googlevideo.com/videoplayback?expire=1"
 
 
 def test_resolver_error_en_vivo_no_comenzo(monkeypatch):
     monkeypatch.setattr(resolver, "_ejecutar_ytdlp",
-                        lambda url: (1, "", "ERROR: [youtube] abc: This live event will begin in 2 hours."))
+                        lambda url, *args: (1, "", "ERROR: [youtube] abc: This live event will begin in 2 hours."))
     with pytest.raises(resolver.ErrorResolucion, match="todavía no comienza"):
         resolver.resolver_fuente("https://www.youtube.com/watch?v=abc")
 
 
 def test_resolver_error_privado(monkeypatch):
     monkeypatch.setattr(resolver, "_ejecutar_ytdlp",
-                        lambda url: (1, "", "ERROR: [youtube] abc: Private video. Sign in if you've been granted access to this video."))
+                        lambda url, *args: (1, "", "ERROR: [youtube] abc: Private video. Sign in if you've been granted access to this video."))
     with pytest.raises(resolver.ErrorResolucion, match="privado"):
         resolver.resolver_fuente("https://youtu.be/abc")
 
 
 def test_resolver_error_no_disponible(monkeypatch):
     monkeypatch.setattr(resolver, "_ejecutar_ytdlp",
-                        lambda url: (1, "", "ERROR: [youtube] abc: Video unavailable"))
+                        lambda url, *args: (1, "", "ERROR: [youtube] abc: Video unavailable"))
     with pytest.raises(resolver.ErrorResolucion, match="no está disponible"):
         resolver.resolver_fuente("https://www.twitch.tv/abc")
 
 
 def test_resolver_error_sin_senal(monkeypatch):
-    monkeypatch.setattr(resolver, "_ejecutar_ytdlp", lambda url: (0, "", ""))
+    monkeypatch.setattr(resolver, "_ejecutar_ytdlp", lambda url, *args: (0, "", ""))
     with pytest.raises(resolver.ErrorResolucion, match="ninguna señal"):
         resolver.resolver_fuente("https://www.youtube.com/watch?v=abc")
 
 
 def test_resolver_sin_ytdlp_instalado(monkeypatch):
     monkeypatch.setattr(resolver, "_ejecutar_ytdlp",
-                        lambda url: (1, "", "/usr/bin/python: No module named yt_dlp"))
+                        lambda url, *args: (1, "", "/usr/bin/python: No module named yt_dlp"))
     with pytest.raises(resolver.ErrorResolucion, match="yt-dlp no está instalado"):
         resolver.resolver_fuente("https://www.youtube.com/watch?v=abc")
 

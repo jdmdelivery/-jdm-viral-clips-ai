@@ -260,8 +260,11 @@ def test_panel_centro_live_visual_y_auto():
     cuerpo = appjs.split("function seguirEstadoGrabacion")[1].split("function restaurarEstadoGrabacion")[0]
     assert "cargarClipsSesion()" in cuerpo
     assert "firmaClipsSesion" in appjs
-    # Botón protagonista GRABAR y pasos explicados en la propia pantalla.
-    assert 'id="btn-grabar" class="btn-grabar"' in index and "⏺ GRABAR" in index
+    # Botón protagonista GRABAR y pasos explicados en la propia pantalla
+    # (vista v1.3.5 restaurada en la v1.3.8: el botón es #btn-iniciar
+    # con clase btn-grabar, junto a su #btn-detener separado).
+    assert 'id="btn-iniciar" class="rojo btn-grabar"' in index and "⏺ GRABAR" in index
+    assert 'id="btn-detener"' in index
     assert 'class="pasos"' in index and "Los clips aparecen solos" in index
     assert ".btn-grabar" in css and ".bib-dur" in css and ".pasos" in css
     # Subtítulos APAGADOS por defecto en el panel: que exista la copia

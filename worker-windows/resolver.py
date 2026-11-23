@@ -39,10 +39,13 @@ def es_senal_directa(url):
     if ".m3u8" in p.path: return True
     return not es_pagina_plataforma(url)
 
-def _ejecutar_ytdlp(url):
+def _ejecutar_ytdlp(url, extra=()):
     """Corre yt-dlp en modo «solo dame la URL de la señal» (-g).
     Devuelve (returncode, stdout, stderr). Aislado para poder simularlo
-    en los tests sin red ni yt-dlp real.
+    en los tests sin red ni yt-dlp real. «extra» son argumentos
+    adicionales de yt-dlp (la cadena de reintentos ante el muro de
+    inicio de sesión los usa: clientes alternativos, cookies del
+    navegador); sin «extra» es EXACTAMENTE la invocación histórica.
 
     Selector de formato: primero «best» (un solo archivo con audio+video,
     lo normal en un directo). Si la plataforma no ofrece ese archivo
@@ -53,12 +56,59 @@ def _ejecutar_ytdlp(url):
     «Requested format is not available»."""
     try:
         r = subprocess.run([sys.executable, "-m", "yt_dlp", "-g", "--no-warnings",
-                            "-f", "best/bv*+ba", str(url)],
+                            "-f", "best/bv*+ba", *extra, str(url)],
                            capture_output=True, text=True, timeout=180, creationflags=SIN_VENTANA)
         return r.returncode, r.stdout or "", r.stderr or ""
     except subprocess.TimeoutExpired:
         raise ErrorResolucion("La plataforma tardó demasiado en entregar la señal "
                               "(yt-dlp superó los 180 s). Inténtalo de nuevo.")
+
+# --- Muro de inicio de sesión / anti-bots de YouTube -----------------------
+# A ciertos videos, YouTube le pide a yt-dlp «Sign in to confirm you're
+# not a bot» aunque el video sea público (le pasó a Jose con
+# watch?v=Dxi1CRQMQZo, sesión #20, mientras otros videos resolvían
+# bien). Antes, el resolver se rendía en el primer intento. Ahora hay
+# una CADENA de reintentos reales, en orden:
+#   1. la vía habitual (la de siempre);
+#   2. clientes alternativos de YouTube (extractor-args player_client):
+#      android, ios y web_safari no pasan por el mismo muro;
+#   3. la sesión del PROPIO navegador de esta PC (--cookies-from-browser
+#      chrome, y si Chrome está cerrado/bloqueado, edge y firefox):
+#      yt-dlp lee las cookies LOCALMENTE en esta PC, como haría el
+#      propio usuario con su sesión; nada se sube a ningún sitio.
+# Solo se avanza al siguiente intento cuando el fallo es el muro de
+# login/bots (o, en los intentos con cookies, cuando el navegador no
+# entregó sus cookies). Los demás errores (privado, no disponible,
+# formato, en vivo que no comienza) son definitivos: se reportan al
+# momento, sin gastar la cadena.
+_PATRONES_LOGIN = ("sign in to confirm", "please sign in", "sign in to",
+                   "login required", "log in to", "not a bot",
+                   "use --cookies", "cookies-from-browser")
+_PATRONES_COOKIES_FALLIDAS = ("could not copy", "failed to decrypt",
+                              "unable to load cookies", "no cookies",
+                              "could not find", "cookies database",
+                              "failed to load cookies")
+
+def _es_error_login(stderr):
+    baja = (stderr or "").lower()
+    return any(p in baja for p in _PATRONES_LOGIN)
+
+def _es_error_cookies(stderr):
+    baja = (stderr or "").lower()
+    return any(p in baja for p in _PATRONES_COOKIES_FALLIDAS)
+
+def _intentos_resolucion(url):
+    """La cadena ordenada de intentos: [(descripción, argumentos extra)]."""
+    intentos = [("la vía habitual", ())]
+    host = _host(url)
+    if host == "youtube.com" or host.endswith(".youtube.com") or host == "youtu.be":
+        for cliente in ("android", "ios", "web_safari"):
+            intentos.append((f"el cliente «{cliente}» de YouTube",
+                             ("--extractor-args", f"youtube:player_client={cliente}")))
+    for navegador in ("chrome", "edge", "firefox"):
+        intentos.append((f"la sesión de {navegador} abierta en esta PC",
+                         ("--cookies-from-browser", navegador)))
+    return intentos
 
 def _error_desde_stderr(stderr):
     txt = (stderr or "").strip()
@@ -86,10 +136,8 @@ def _error_desde_stderr(stderr):
                 "(borrado, restringido o enlace incorrecto).")
     if ("sign in to confirm" in baja or "login required" in baja
             or "log in to" in baja or "cookies" in baja or "age" in baja and "confirm" in baja):
-        return ("La plataforma pide iniciar sesión para entregar esta señal; sin la "
-                "sesión del dueño, el trabajador no puede resolverla. No se intenta "
-                "entrar a la cuenta. Usa un HLS o RTMP de una emisión que controles, "
-                "o importa un video propio.")
+        return ("La plataforma pide iniciar sesión para entregar esta señal "
+                "(muro de login/anti-bots).")
     if "certificate_verify_failed" in baja or "certificate verify failed" in baja:
         return ("La conexión con la plataforma no pasó la verificación de seguridad "
                 "(certificado SSL). Suele causarlo un proxy/antivirus de la red de "
@@ -112,24 +160,65 @@ def es_archivo_local(url):
         return False
 
 def resolver_fuente(url):
-    """Devuelve la URL lista para FFmpeg. Ver docstring del módulo."""
+    """Devuelve la URL lista para FFmpeg. Ver docstring del módulo.
+
+    Las páginas de plataforma se resuelven con la cadena de intentos
+    de _intentos_resolucion: el éxito de CUALQUIER intento corta la
+    cadena. Un error que no sea el muro de login (privado, no
+    disponible, formato, en vivo sin comenzar) es definitivo y se
+    reporta al momento. Si TODOS los intentos caen ante el muro, el
+    error final dice con honestidad qué se intentó."""
     u = str(url)
     if es_archivo_local(u):
         return str(Path(u).resolve())
     if es_senal_directa(u):
         return u
-    rc, out, err = _ejecutar_ytdlp(u)
-    if rc != 0:
+    intentos = _intentos_resolucion(u)
+    probados = []
+    ultimo_error = ""
+    hubo_login = False
+    for descripcion, extra in intentos:
+        es_intento_cookies = "--cookies-from-browser" in extra
+        try:
+            rc, out, err = _ejecutar_ytdlp(u, extra)
+        except ErrorResolucion as e:
+            # Timeout de yt-dlp: este intento no entregó; se prueba el
+            # siguiente y, si era el último, se reporta el timeout.
+            probados.append(descripcion)
+            ultimo_error = str(e)
+            continue
+        if rc == 0:
+            senales = [l.strip() for l in (out or "").splitlines() if l.strip()]
+            if senales:
+                # Una señal: la URL tal cual. Dos (video y audio por
+                # separado, del selector «bv*+ba»): unidas por salto de
+                # línea, en ese orden; el Recorder las abre como dos
+                # entradas de FFmpeg (ver _cmd_grabar).
+                return "\n".join(senales[:2])
+            raise ErrorResolucion("La plataforma no entregó ninguna señal para ese enlace "
+                                  "(¿es un en vivo válido y ya comenzó?).")
         if "no module named yt_dlp" in (err or "").lower():
             raise ErrorResolucion("yt-dlp no está instalado en esta PC: vuelve a correr "
                                   "el instalador del trabajador (install-worker) para "
                                   "poder grabar desde enlaces de plataformas.")
+        if _es_error_login(err) or (es_intento_cookies and _es_error_cookies(err)):
+            # Muro de login/bots (o el navegador no entregó sus
+            # cookies): se pasa al siguiente intento de la cadena.
+            probados.append(descripcion)
+            hubo_login = hubo_login or _es_error_login(err)
+            ultimo_error = _error_desde_stderr(err)
+            continue
+        # Error definitivo (privado, no disponible, formato, etc.):
+        # no tiene sentido gastar el resto de la cadena.
         raise ErrorResolucion(_error_desde_stderr(err))
-    senales = [l.strip() for l in (out or "").splitlines() if l.strip()]
-    if not senales:
-        raise ErrorResolucion("La plataforma no entregó ninguna señal para ese enlace "
-                              "(¿es un en vivo válido y ya comenzó?).")
-    # Una señal: la URL tal cual. Dos (video y audio por separado, del
-    # selector «bv*+ba»): unidas por salto de línea, en ese orden; el
-    # Recorder las abre como dos entradas de FFmpeg (ver _cmd_grabar).
-    return "\n".join(senales[:2])
+    if hubo_login:
+        raise ErrorResolucion(
+            "La plataforma siguió pidiendo iniciar sesión tras intentarlo por "
+            + ", ".join(probados) + ". Ninguna vía entregó la señal. "
+            "Si es un video de una cuenta tuya, comprueba que esa cuenta tenga la "
+            "sesión abierta en Chrome en esta PC y vuelve a intentarlo; si no, usa "
+            "un HLS o RTMP de una emisión que controles, o importa un video propio. "
+            f"Último motivo de la plataforma: {ultimo_error}")
+    raise ErrorResolucion(
+        "No se pudo resolver la señal tras intentarlo por "
+        + ", ".join(probados) + f". Último motivo: {ultimo_error}")

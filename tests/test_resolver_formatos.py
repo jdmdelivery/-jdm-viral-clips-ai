@@ -22,7 +22,7 @@ from recorder import _cmd_grabar
 def test_error_formato_no_es_video_borrado(monkeypatch):
     monkeypatch.setattr(
         resolver, "_ejecutar_ytdlp",
-        lambda url: (1, "", "ERROR: Requested format is not available. "
+        lambda url, *args: (1, "", "ERROR: Requested format is not available. "
                             "Use --list-formats for a list of available formats"))
     with pytest.raises(resolver.ErrorResolucion) as e:
         resolver.resolver_fuente("https://www.youtube.com/watch?v=abc")
@@ -32,7 +32,7 @@ def test_error_formato_no_es_video_borrado(monkeypatch):
 
 def test_error_video_unavailable_sigue_siendo_no_disponible(monkeypatch):
     monkeypatch.setattr(resolver, "_ejecutar_ytdlp",
-                        lambda url: (1, "", "ERROR: [youtube] abc: Video unavailable"))
+                        lambda url, *args: (1, "", "ERROR: [youtube] abc: Video unavailable"))
     with pytest.raises(resolver.ErrorResolucion, match="no está disponible"):
         resolver.resolver_fuente("https://www.youtube.com/watch?v=abc")
 
@@ -40,7 +40,7 @@ def test_error_video_unavailable_sigue_siendo_no_disponible(monkeypatch):
 def test_resolver_par_video_audio_dos_lineas(monkeypatch):
     monkeypatch.setattr(
         resolver, "_ejecutar_ytdlp",
-        lambda url: (0, "https://rr5.googlevideo.com/videoplayback?v=1\n"
+        lambda url, *args: (0, "https://rr5.googlevideo.com/videoplayback?v=1\n"
                         "https://rr5.googlevideo.com/videoplayback?a=1\n", ""))
     assert resolver.resolver_fuente("https://www.youtube.com/watch?v=abc") == (
         "https://rr5.googlevideo.com/videoplayback?v=1\n"
@@ -49,7 +49,7 @@ def test_resolver_par_video_audio_dos_lineas(monkeypatch):
 
 def test_resolver_una_sola_senal_sin_cambio(monkeypatch):
     monkeypatch.setattr(resolver, "_ejecutar_ytdlp",
-                        lambda url: (0, "https://rr5.googlevideo.com/videoplayback?x=1\n", ""))
+                        lambda url, *args: (0, "https://rr5.googlevideo.com/videoplayback?x=1\n", ""))
     assert resolver.resolver_fuente("https://www.youtube.com/watch?v=abc") == \
         "https://rr5.googlevideo.com/videoplayback?x=1"
 

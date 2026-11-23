@@ -2155,7 +2155,7 @@ body{margin:0;background:#0f0f0f;color:#f4f4f5;font-family:system-ui,'Segoe UI',
 .wrap{max-width:780px;margin:0 auto;padding:28px 18px 48px}
 .card{background:#1a1a1d;border:1px solid #2e2e33;border-radius:16px;padding:28px 30px}
 h1{font-size:27px;margin:0 0 4px}
-.bar{height:4px;border-radius:4px;background:linear-gradient(92deg,#e63946,#f4842b,#d6336c);margin:12px 0 20px}
+.bar{height:4px;border-radius:4px;background:linear-gradient(92deg,#ff0033,#ff7a18,#ff2ea6,#a335d6);margin:12px 0 20px}
 h2{font-size:17.5px;margin:22px 0 6px;color:#fff}
 p,li{color:#d6d6dc;font-size:15px}
 a{color:#ff5c7a}

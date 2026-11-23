@@ -58,29 +58,25 @@
           <p id="live-estado" class="oculto"></p>
           <div id="live-ext"></div>
           <p id="wk-chip" class="chip">Motor: …</p>
-          <button id="btn-grabar" class="btn-grabar" onclick="botonGrabar()">⏺ GRABAR</button>
-          <p id="radar-estado" class="radar-linea">📡 Radar: —</p>
+          <div class="botones">
+            <button onclick="abrirLive()">▶ ABRIR LIVE</button>
+            <button id="btn-iniciar" class="rojo btn-grabar" onclick="iniciarGrab()">⏺ GRABAR</button>
+            <button id="btn-radar" onclick="activarRadar()">📡 ACTIVAR RADAR VIRAL <span id="radar-count"></span></button>
+            <label class="nota">Duración del clip
+              <select id="clip-largo">
+                <option value="">Automática</option>
+                <option value="60">60 s</option>
+                <option value="75">75 s</option>
+                <option value="90">90 s</option>
+                <option value="120">120 s</option>
+              </select>
+            </label>
+            <button onclick="ir('radar')">🔥 VER MOMENTOS DETECTADOS</button>
+            <button class="grad" onclick="ir('analizar')">🎬 GENERAR CLIPS</button>
+            <button class="grad" onclick="ir('publicar')">📤 PUBLICAR CLIP</button>
+            <button id="btn-detener" class="rojo" onclick="detenerGrab()">⏹ DETENER GRABACIÓN</button>
+          </div>
           <p id="live-msg" class="msg"></p>
-          <details class="mas-opciones">
-            <summary>Más opciones</summary>
-            <div class="botones">
-              <button onclick="abrirLive()">▶ ABRIR LIVE</button>
-              <button id="btn-radar" onclick="activarRadar()">📡 ACTIVAR RADAR VIRAL <span id="radar-count"></span></button>
-              <label class="nota">Duración del clip
-                <select id="clip-largo">
-                  <option value="">Automática</option>
-                  <option value="60">60 s</option>
-                  <option value="75">75 s</option>
-                  <option value="90">90 s</option>
-                  <option value="120">120 s</option>
-                </select>
-              </label>
-              <button onclick="ir('radar')">🔥 VER MOMENTOS DETECTADOS</button>
-              <button onclick="generarTodosClips()">GENERAR TODOS LOS CLIPS</button>
-              <button onclick="ir('analizar')">🎬 GENERAR CLIPS</button>
-              <button onclick="ir('publicar')">📤 PUBLICAR CLIP</button>
-            </div>
-          </details>
         </div>
       </div>
       <div id="ss-tabla"></div>

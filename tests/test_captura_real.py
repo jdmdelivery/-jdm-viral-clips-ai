@@ -1,5 +1,9 @@
 """Captura real, error de autenticación y un MP4 generado de punta a punta.
-No llama a YouTube ni intenta saltarse su inicio de sesión."""
+No llama a YouTube de verdad: el ejecutor de yt-dlp se simula. Desde la
+v1.3.8, ante el muro «Sign in to confirm» el resolver SÍ reintenta por
+otras vías reales (clientes alternativos y la sesión del navegador de
+la propia PC, leída localmente por yt-dlp); solo cuando TODAS caen, la
+sesión queda en ERROR DE FUENTE y nunca se marca «grabando»."""
 import subprocess
 from pathlib import Path
 
@@ -34,10 +38,20 @@ def _ffprobe(path):
     return r.stdout
 
 
-def test_youtube_que_pide_sesion_no_se_reintenta_ni_marca_grabando():
-    mensaje = resolver._error_desde_stderr("ERROR: Sign in to confirm you’re not a bot")
+def test_youtube_que_pide_sesion_tras_agotar_intentos_no_marca_grabando(monkeypatch):
+    # v1.3.8: el resolver agota la cadena completa (vía habitual,
+    # clientes alternativos y cookies del navegador de esta PC) ante el
+    # muro de login; el error final es honesto sobre lo intentado.
+    monkeypatch.setattr(
+        resolver, "_ejecutar_ytdlp",
+        lambda url, *args: (1, "", "ERROR: Sign in to confirm you’re not a bot"))
+    try:
+        resolver.resolver_fuente("https://www.youtube.com/watch?v=dmd5f5knGrw")
+        raise AssertionError("debió lanzar ErrorResolucion")
+    except resolver.ErrorResolucion as e:
+        mensaje = str(e)
     assert "iniciar sesión" in mensaje
-    assert "No se intenta" in mensaje
+    assert "vía habitual" in mensaje and "chrome" in mensaje
     h = _usuario("yt")
     wh = _worker(h)
     ses = client.post("/sessions", json={"title": "YouTube cerrado"}, headers=h).json()
