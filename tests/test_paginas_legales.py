@@ -53,6 +53,8 @@ def test_verificacion_tiktok_en_raiz():
 def test_css_redisenado_servido():
     r = client.get("/static/style.css")
     assert r.status_code == 200
-    # Rojo líder del rediseño (reemplaza el esquema morado/azul anterior).
-    assert "#ff0033" in r.text
+    # Acento único del rediseño sobrio 2026-11-23 (sustituye al rojo
+    # neón #ff0033 del rediseño 2026-11-14, por orden de Jose).
+    assert "#e63946" in r.text
+    assert "#ff0033" not in r.text
     assert "#7b2fff" not in r.text
