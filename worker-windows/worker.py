@@ -5,7 +5,7 @@ Uso: python worker.py --config worker-config.json   (ver README.md)"""
 import argparse, json, os, subprocess, sys, threading, time
 from pathlib import Path
 
-VERSION = "1.3.8"
+VERSION = "1.3.9"
 sys.path.insert(0, str(Path(__file__).parent))
 from procesos import SIN_VENTANA
 import instancia
@@ -367,6 +367,29 @@ def _hilo_actualizador(config_path, hay_grabacion=None):
     except Exception as e:
         print(f"Actualizador: hilo detenido por un error: {e}")
 
+def _hilo_latido(api, intervalo_s=10):
+    """Latido y progreso en un hilo APARTE del bucle de trabajos.
+
+    La API marca al trabajador «desconectado» si el último heartbeat
+    tiene más de 30 s, y el bucle principal procesa los trabajos de
+    forma SÍNCRONA: un generar_clip, un analizar_video o una subida de
+    copia (timeout de 600 s con reintentos) lo ocupan entero y el
+    latido —que solo se enviaba al inicio de cada vuelta— llegaba
+    tarde. Resultado (video de Jose, 2026-11-23): el chip pasaba a
+    TRABAJADOR DESCONECTADO y el contador de MB se congelaba mientras
+    la grabación seguía viva en su propio hilo. Este hilo late cada
+    10 s y reporta el progreso de las grabaciones activas pase lo que
+    pase en el bucle. Solo usa llamadas que NUNCA tocan la cola offline
+    (heartbeat y reportar_progreso tragan sus propios errores de red),
+    así que no compite con sincronizar_pendientes del bucle."""
+    while True:
+        try: api.heartbeat(VERSION)
+        except Exception: pass
+        for sid_l, rec_l in list(grabaciones.items()):
+            try: api.reportar_progreso(sid_l, rec_l.bytes_en_disco())
+            except Exception: pass
+        time.sleep(intervalo_s)
+
 def _detener_todo():
     """Cierre limpio del motor: detiene radares y grabaciones en curso
     para que ningún FFmpeg quede huérfano al salir (antes, un Ctrl+C o el
@@ -414,6 +437,10 @@ def main():
     else:
         print("Actualizador: desactivado en esta configuración local.")
     api = ApiClient(cfg["api_url"], cfg["worker_token"], cfg.get("cola_offline", "cola-offline.json"))
+    # El latido va en su propio hilo: el bucle de trabajos puede quedar
+    # ocupado minutos con un trabajo largo y el chip no debe pasar a
+    # «desconectado» por eso (ver _hilo_latido).
+    threading.Thread(target=_hilo_latido, args=(api,), daemon=True).start()
     print(f"Motor JDM Viral Clips AI v{VERSION} conectado a {cfg['api_url']} — Ctrl+C para salir")
     try:
         from subtitulos import iniciar_cola

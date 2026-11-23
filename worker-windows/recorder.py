@@ -156,6 +156,11 @@ class Recorder:
         self.resolver = resolver
         self.outdir.mkdir(parents=True, exist_ok=True)
         self.buffer = BufferCircular(self.outdir, minutos=buffer_min)
+        # Corrida nueva = manifest nuevo: la carpeta de la sesión se
+        # reutiliza y el manifest de la captura anterior (otra fuente,
+        # otra línea de tiempo) NO se hereda. Los archivos viejos no se
+        # tocan; simplemente dejan de contar como parte de esta corrida.
+        self.buffer.reiniciar()
         self.en_vivo, self.max_reintentos = en_vivo, max_reintentos
         self.proc = None; self.detener_flag = threading.Event()
         self.hilo = None; self.reintentos = 0; self.inicio = None
@@ -163,6 +168,25 @@ class Recorder:
         self._cursor = 0.0; self._finalizados = set(); self.error_union = ""
     def _segmentos(self):
         return sorted(self.outdir.glob("seg_*.mp4"))
+    def _segmentos_corrida(self):
+        """Solo los segmentos de ESTA corrida (mtime >= inicio de la
+        corrida, con 1 s de tolerancia: el mismo criterio que la guarda
+        de _captura_lista de la v1.3.3). La carpeta de la sesión se
+        reutiliza entre grabaciones y conserva seg_*.mp4 de capturas
+        anteriores: sin este filtro, el registro en el manifest, la
+        unión y el contador de bytes mezclaban dos fuentes distintas
+        (sesión #20, 2026-11-23: segmentos del GTA anterior dentro del
+        en vivo de Alofoke). Un segmento que el FFmpeg actual sobrescribe
+        recibe mtime fresco y SÍ cuenta como de esta corrida."""
+        corte = self._t_inicio - 1.0
+        propios = []
+        for p in self._segmentos():
+            try:
+                if p.stat().st_mtime >= corte:
+                    propios.append(p)
+            except OSError:
+                continue
+        return propios
     def _archivo_estable(self, p, intentos=6, pausa=0.25):
         """El muxer de segmentos crea el archivo antes de cerrarlo. No se mide
         ni se puntúa hasta que el tamaño deja de cambiar."""
@@ -186,13 +210,16 @@ class Recorder:
         self.buffer.registrar(str(p), idx, round(self._cursor, 3), round(d, 3))
         self._cursor += d; self._finalizados.add(p.name)
     def _registrar_nuevos(self, vistos):
-        # Se finalizan todos menos el último (que aún puede estar escribiéndose).
-        segs = self._segmentos()
+        # Se finalizan todos menos el último (que aún puede estar
+        # escribiéndose) — y SOLO los de esta corrida: registrar un
+        # segmento viejo le pondría la línea de tiempo de la captura
+        # actual y el radar lo cortaría como si fuera de esta fuente.
+        segs = self._segmentos_corrida()
         for p in segs[:-1]:
             if p.name not in self._finalizados:
                 self._finalizar(p); vistos.add(p.name)
     def _finalizar_todos(self):
-        for p in self._segmentos():
+        for p in self._segmentos_corrida():
             if p.name not in self._finalizados:
                 self._finalizar(p)
     def _refrescar_fuente(self):
@@ -238,7 +265,7 @@ class Recorder:
             self._registrar_nuevos(vistos)
             if self.detener_flag.is_set(): break
             # Salida inesperada: reconexión (solo fuentes en vivo; un archivo que terminó no reintenta)
-            segs = self._segmentos()
+            segs = self._segmentos_corrida()
             if not self.en_vivo or not segs: break
             self.reintentos += 1
             if self.reintentos > self.max_reintentos: break
@@ -346,7 +373,7 @@ class Recorder:
         Tras unir, los segmentos siguen en disco, así que la suma sigue
         representando el total capturado."""
         total = 0
-        for p in self._segmentos():
+        for p in self._segmentos_corrida():
             try:
                 if p.is_file(): total += p.stat().st_size
             except OSError:
@@ -373,7 +400,11 @@ class Recorder:
         except Exception:
             return False
     def unir(self, salida="grabacion_completa.mp4"):
-        segs = [p for p in self._segmentos() if p.is_file() and p.stat().st_size > 0]
+        # Solo los segmentos de ESTA corrida: unir también los de una
+        # captura anterior dejaría la película de esta sesión empezando
+        # con la fuente vieja (la misma contaminación que sufrió el
+        # radar en la sesión #20).
+        segs = [p for p in self._segmentos_corrida() if p.is_file() and p.stat().st_size > 0]
         out = self.outdir / salida
         if not segs:
             if self._film_valida(out):

@@ -46,17 +46,44 @@ class RadarSesion:
         self.errores = []                 # errores no fatales (diagnóstico)
 
     # ---------- línea de tiempo / segmentos ----------
+    def _entradas_corrida(self):
+        """Entradas del manifest que pertenecen a la corrida ACTUAL del
+        Recorder. La carpeta de la sesión se reutiliza entre grabaciones:
+        si una entrada vieja sobreviviera en el manifest (otra fuente,
+        otra línea de tiempo), puntuarla y cortarla metería la grabación
+        anterior dentro de los clips de esta (sesión #20, 2026-11-23).
+        El criterio es el mtime del archivo contra el inicio de la
+        corrida (el Recorder lo expone en _t_inicio; en su defecto se
+        usa recorder.inicio), con 1 s de tolerancia — el mismo de la
+        guarda de _captura_lista de la v1.3.3. Sin referencia temporal
+        no se filtra nada."""
+        entradas = self.recorder.buffer.segmentos()
+        referencia = getattr(self.recorder, "_t_inicio", None)
+        if referencia is None:
+            referencia = getattr(self.recorder, "inicio", None)
+        if referencia is None:
+            return list(entradas)
+        corte = float(referencia) - 1.0
+        propias = []
+        for e in entradas:
+            try:
+                if Path(e["path"]).stat().st_mtime >= corte:
+                    propias.append(e)
+            except OSError:
+                continue
+        return propias
+
     def _segmentos(self, incluir_ultimo=False):
         """Segmentos finalizados según el manifest del buffer del Recorder,
         ordenados por índice. Mientras se graba se excluye el último (puede
         estar cerrándose); en la pasada final se incluyen todos."""
-        entradas = sorted(self.recorder.buffer.segmentos(), key=lambda e: e["indice"])
+        entradas = sorted(self._entradas_corrida(), key=lambda e: e["indice"])
         if not incluir_ultimo and len(entradas) >= 1:
             entradas = entradas[:-1]
         return entradas
 
     def _fin_total(self):
-        entradas = self.recorder.buffer.segmentos()
+        entradas = self._entradas_corrida()
         if not entradas: return 0.0
         return max(e["inicio_s"] + e["duracion_s"] for e in entradas)
 
@@ -74,7 +101,7 @@ class RadarSesion:
     def _generar_clip(self, ventana, fin_total):
         ini, fin = contexto(ventana["start_s"], ventana["end_s"], fin_total,
                             self.pre_s, self.post_s)
-        entradas = [e for e in self.recorder.buffer.segmentos()
+        entradas = [e for e in self._entradas_corrida()
                     if e["inicio_s"] + e["duracion_s"] > ini and e["inicio_s"] < fin]
         if not entradas: return None
         entradas.sort(key=lambda e: e["indice"])

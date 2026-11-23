@@ -17,6 +17,18 @@ class BufferCircular:
         """Manifest actual: los segmentos YA finalizados con su línea de
         tiempo real (inicio_s/duracion_s medidos). Lo usa el radar en vivo."""
         return self._manifest()
+    def reiniciar(self):
+        """Empieza una corrida NUEVA: el manifest vuelve a [] y se olvidan
+        los protegidos. La carpeta de la sesión se REUTILIZA entre
+        grabaciones (sesion-<id> es siempre la misma) y el manifest de la
+        corrida anterior describe OTRA fuente con OTRA línea de tiempo:
+        heredarlo hacía que el radar puntuara y cortara los segmentos
+        viejos como si fueran de la captura actual (sesión #20, 2026-11-23:
+        clips del GTA anterior dentro del en vivo de Alofoke). Solo se
+        reinicia el ÍNDICE: los archivos de segmentos viejos NO se borran,
+        quedan en disco como grabación anterior del usuario."""
+        self.protegidos = set()
+        self.manifest_path.write_text("[]", encoding="utf-8")
     def registrar(self, path, indice, inicio_s, duracion_s=10):
         m = self._manifest()
         m.append({"path": str(path), "indice": indice, "inicio_s": inicio_s,
