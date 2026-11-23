@@ -1,12 +1,120 @@
 """Grabación con FFmpeg en segmentos de 10 s. La grabación corre en un proceso
 separado: NUNCA se detiene porque la IA esté procesando un clip.
-Incluye reconexión con reintentos y unión de segmentos al finalizar."""
+Incluye reconexión con reintentos y unión de segmentos al finalizar.
+
+Huérfanos (auditoría del trabajo #71, 2026-11-20): si el motor muere o se
+relanza sin pasar por stop() (os._exit del actualizador, cierre a la fuerza),
+su FFmpeg hijo quedaba vivo escribiendo segmentos en la carpeta de la sesión
+sin que nadie lo gobernara. Ahora el Recorder anota el PID de su FFmpeg en
+ffmpeg.pid dentro de la carpeta de la sesión, y al arrancar una grabación
+nueva en esa carpeta se barre el huérfano anterior: solo se termina el
+proceso si sigue vivo Y es de verdad un ffmpeg (nunca otro programa que
+reutilizara el PID)."""
 import json, os, subprocess, threading, time
 from pathlib import Path
 from procesos import SIN_VENTANA
 from buffer import BufferCircular
 
 SEG = 10
+ARCHIVO_PID = "ffmpeg.pid"
+
+def _pid_vivo(pid):
+    """True si el proceso `pid` existe ahora mismo. Nunca lanza."""
+    if not pid or pid <= 0:
+        return False
+    try:
+        if os.name == "nt":
+            import ctypes
+            kernel32 = ctypes.windll.kernel32
+            handle = kernel32.OpenProcess(0x1000, False, int(pid))  # QUERY_LIMITED_INFORMATION
+            if not handle:
+                return False
+            try:
+                codigo = ctypes.c_ulong()
+                if not kernel32.GetExitCodeProcess(handle, ctypes.byref(codigo)):
+                    return False
+                return codigo.value == 259  # STILL_ACTIVE
+            finally:
+                kernel32.CloseHandle(handle)
+        os.kill(int(pid), 0)
+        return True
+    except OSError:
+        return False
+    except Exception:
+        return False
+
+def _es_ffmpeg(pid):
+    """True si el proceso `pid` es un ejecutable ffmpeg. Protege contra la
+    reutilización de PID: un PID viejo anotado en ffmpeg.pid podría ser hoy
+    otro programa, y ese NO se toca. Nunca lanza."""
+    try:
+        if os.name == "nt":
+            import ctypes
+            from ctypes import wintypes
+            kernel32 = ctypes.windll.kernel32
+            handle = kernel32.OpenProcess(0x1000, False, int(pid))
+            if not handle:
+                return False
+            try:
+                buf = ctypes.create_unicode_buffer(32768)
+                tam = wintypes.DWORD(len(buf))
+                if not kernel32.QueryFullProcessImageNameW(handle, 0, buf, ctypes.byref(tam)):
+                    return False
+                return "ffmpeg" in buf.value.lower()
+            finally:
+                kernel32.CloseHandle(handle)
+        cmdline = Path(f"/proc/{int(pid)}/cmdline").read_bytes().replace(b"\x00", b" ").decode("utf-8", "replace")
+        return "ffmpeg" in cmdline.lower()
+    except Exception:
+        return False
+
+def _terminar_proceso(pid):
+    """Termina el proceso `pid` (y en Windows también su árbol: el FFmpeg
+    de grabación no tiene hijos propios, pero taskkill /T cubre el caso).
+    Nunca lanza."""
+    try:
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/PID", str(int(pid)), "/T", "/F"],
+                           capture_output=True, timeout=15, creationflags=SIN_VENTANA)
+        else:
+            import signal
+            os.kill(int(pid), signal.SIGTERM)
+            for _ in range(20):
+                if not _pid_vivo(pid):
+                    break
+                time.sleep(0.1)
+            if _pid_vivo(pid):
+                os.kill(int(pid), signal.SIGKILL)
+    except Exception:
+        pass
+
+def limpiar_ffmpeg_huerfano(outdir):
+    """Barre el FFmpeg huérfano de una corrida anterior en `outdir`.
+
+    Lee ffmpeg.pid: si el proceso ya no existe, solo se borra el archivo
+    viejo; si existe y es un ffmpeg, se termina (es el hijo de un motor
+    que murió sin detenerlo) y se borra el archivo; si existe pero NO es
+    un ffmpeg (PID reutilizado), no se toca ni el proceso ni el archivo.
+    Devuelve True si se terminó un huérfano. Nunca lanza."""
+    ruta = Path(outdir) / ARCHIVO_PID
+    try:
+        if not ruta.is_file():
+            return False
+        pid = int((ruta.read_text(encoding="utf-8") or "").strip() or 0)
+    except Exception:
+        return False
+    if pid == os.getpid():
+        return False
+    if not _pid_vivo(pid):
+        try: ruta.unlink(missing_ok=True)
+        except OSError: pass
+        return False
+    if not _es_ffmpeg(pid):
+        return False
+    _terminar_proceso(pid)
+    try: ruta.unlink(missing_ok=True)
+    except OSError: pass
+    return True
 
 def duracion_real(path):
     """Duración real de un segmento cerrado (el muxer corta en keyframes: no asumir 10 s exactos)."""
@@ -96,6 +204,23 @@ class Recorder:
             if nueva: self.fuente = nueva
         except Exception:
             pass
+    def _anotar_pid(self):
+        """Anota el PID del FFmpeg en curso en ffmpeg.pid (ver docstring del
+        módulo): es la única pista fiable para barrerlo si este motor muere
+        sin pasar por stop()."""
+        try:
+            if self.proc and self.proc.pid:
+                (self.outdir / ARCHIVO_PID).write_text(str(self.proc.pid), encoding="utf-8")
+        except OSError:
+            pass
+    def _borrar_pid(self):
+        try:
+            ruta = self.outdir / ARCHIVO_PID
+            if self.proc and ruta.is_file():
+                if (ruta.read_text(encoding="utf-8") or "").strip() == str(self.proc.pid):
+                    ruta.unlink(missing_ok=True)
+        except OSError:
+            pass
     def _bucle(self):
         self.inicio = time.time()
         vistos = set()
@@ -104,10 +229,12 @@ class Recorder:
             log = open(self.outdir / "ffmpeg.log", "ab")
             self.proc = subprocess.Popen(_cmd_grabar(self.fuente, self.outdir, start_number, self.en_vivo),
                                          stdout=subprocess.DEVNULL, stderr=log, creationflags=SIN_VENTANA)
+            self._anotar_pid()
             self._log_fh = log
             while self.proc.poll() is None and not self.detener_flag.is_set():
                 time.sleep(0.5)
                 self._registrar_nuevos(vistos)
+            self._borrar_pid()
             self._registrar_nuevos(vistos)
             if self.detener_flag.is_set(): break
             # Salida inesperada: reconexión (solo fuentes en vivo; un archivo que terminó no reintenta)
@@ -187,6 +314,11 @@ class Recorder:
                 return False, self._motivo_sin_captura()
             time.sleep(0.4)
     def start(self):
+        # Antes de grabar: si una corrida anterior de este motor murió sin
+        # detener su FFmpeg, ese huérfano seguiría escribiendo segmentos en
+        # ESTA carpeta y mezclándose con la captura nueva. Se barre primero.
+        if limpiar_ffmpeg_huerfano(self.outdir):
+            print(f"Grabación: se terminó un FFmpeg huérfano de una corrida anterior en {self.outdir}.")
         self._t_inicio = time.time()
         self.hilo = threading.Thread(target=self._bucle, daemon=True); self.hilo.start()
     def stop(self):

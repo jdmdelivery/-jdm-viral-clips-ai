@@ -291,6 +291,73 @@ def _cancelar_jobs_capcut():
         s.close()
 _cancelar_jobs_capcut()
 
+# ---------- Caducidad de trabajos «procesando» (reaper) ----------
+# Auditoría del trabajo #71 (2026-11-20): un trabajo reclamado quedaba en
+# «procesando» PARA SIEMPRE si el trabajador moría o se reiniciaba a mitad
+# (nada lo completaba ni lo fallaba), y la sesión asociada se quedaba en
+# «iniciando»/«deteniendo» sin salida en el panel. Patrón del sector
+# (lease con timeout): lo reclamado hace más de JOB_PROCESANDO_CADUCA_S
+# sin completarse se cierra como «error» con el motivo honesto, y la
+# sesión sale de su estado colgado a «error» con la explicación. El
+# umbral es amplio a propósito: los trabajos legítimos más largos
+# (analizar un video largo, unir una grabación de horas) terminan muy
+# por debajo; esto solo recoge abandonos reales. Se ejecuta al arrancar
+# y en cada reclamo de trabajo (el motor reclama cada pocos segundos,
+# así la limpieza es continua sin hilos nuevos).
+JOB_PROCESANDO_CADUCA_S = 6 * 3600
+
+def _expirar_jobs_procesando(s, ahora=None):
+    """Cierra como «error» los jobs «procesando» abandonados. Devuelve
+    cuántos caducaron. Nunca lanza: la limpieza no debe tumbar el reclamo
+    ni el arranque."""
+    try:
+        ahora = ahora or now()
+        limite = ahora.timestamp() - JOB_PROCESANDO_CADUCA_S
+        caducados = 0
+        for j in s.query(Job).filter_by(status="procesando").all():
+            marca = j.updated_at or j.created_at
+            if marca is None:
+                continue
+            if marca.tzinfo is None:
+                marca = marca.replace(tzinfo=timezone.utc)
+            if marca.timestamp() >= limite:
+                continue
+            j.status = "error"
+            j.error = ("Trabajo caducado: el trabajador lo reclamó hace más "
+                       "de 6 horas y nunca lo completó ni lo falló (el motor "
+                       "se cerró o se reinició a mitad). Se cierra para que "
+                       "no quede «procesando» para siempre.")
+            caducados += 1
+            if j.type in ("iniciar_grabacion", "detener_grabacion"):
+                try: _sid_cad = json.loads(j.payload or "{}").get("session_id")
+                except Exception: _sid_cad = None
+                _ses_cad = s.get(LiveSession, _sid_cad) if _sid_cad else None
+                if _ses_cad and _ses_cad.status in ("iniciando", "deteniendo"):
+                    _ses_cad.status = "error"
+                    _ses_cad.error_fuente = (
+                        "El trabajador no confirmó esta operación: el trabajo "
+                        "caducó en «procesando» (el motor se cerró o se "
+                        "reinició a mitad). La sesión no quedó grabando.")
+                    if j.type == "iniciar_grabacion":
+                        _ses_cad.bytes_captura = 0
+        if caducados:
+            s.commit()
+            print(f"[caducidad] {caducados} trabajo(s) «procesando» abandonados cerrados como error")
+        return caducados
+    except Exception as e:
+        try: s.rollback()
+        except Exception: pass
+        print(f"[caducidad] no se pudieron expirar trabajos: {e}", file=sys.stderr)
+        return 0
+
+def _expirar_jobs_al_arranque():
+    s = SessionLocal()
+    try:
+        return _expirar_jobs_procesando(s)
+    finally:
+        s.close()
+_expirar_jobs_al_arranque()
+
 # ---------- Auth ----------
 def hash_pw(pw: str) -> str:
     salt = secrets.token_hex(16)
@@ -856,7 +923,7 @@ def list_jobs(limit: int = 200, offset: int = 0, user=Depends(current_user), s=D
     q = s.query(Job).order_by(Job.id.desc()).offset(_clamp_offset(offset)).limit(_clamp_limit(limit))
     out = []
     for j in q:
-        d = ser(j, ["id", "type", "status", "attempts", "error", "created_at"])
+        d = ser(j, ["id", "type", "status", "attempts", "error", "created_at", "updated_at"])
         # «result» como JSON ya parseado; None si está vacío o no es JSON válido.
         try: d["result"] = json.loads(j.result) if j.result else None
         except Exception: d["result"] = None
@@ -864,6 +931,9 @@ def list_jobs(limit: int = 200, offset: int = 0, user=Depends(current_user), s=D
     return out
 @app.post("/jobs/claim")
 def claim_job(w=Depends(worker_auth), s=Depends(db)):
+    # Reaper: antes de entregar trabajo nuevo se cierran los «procesando»
+    # abandonados (ver JOB_PROCESANDO_CADUCA_S). Nunca bloquea el reclamo.
+    _expirar_jobs_procesando(s)
     j = s.query(Job).filter_by(status="pendiente").order_by(Job.id).first()
     if not j: return {"job": None}
     j.status = "procesando"; j.attempts += 1; j.worker_id = w.id; s.commit()

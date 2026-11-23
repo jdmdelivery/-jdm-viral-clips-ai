@@ -5,9 +5,10 @@ Uso: python worker.py --config worker-config.json   (ver README.md)"""
 import argparse, json, os, subprocess, sys, threading, time
 from pathlib import Path
 
-VERSION = "1.3.3"
+VERSION = "1.3.4"
 sys.path.insert(0, str(Path(__file__).parent))
 from procesos import SIN_VENTANA
+import instancia
 from sync import ApiClient
 from recorder import Recorder
 from analyzer import analizar_video
@@ -314,7 +315,7 @@ def _registrar_reinicio(huella):
     except Exception:
         pass
 
-def _hilo_actualizador(config_path):
+def _hilo_actualizador(config_path, hay_grabacion=None):
     """Actualizador en segundo plano: revisa a los ~20 s del arranque y
     luego cada 30 minutos (antes era cada 6 horas: un arreglo publicado
     podía tardar horas en llegar a un motor que ya estaba encendido, y el
@@ -322,7 +323,14 @@ def _hilo_actualizador(config_path):
     actualización toca cualquier .py, relanza el motor y sale: los
     módulos se importan al arrancar y sin relanzar seguiría corriendo el
     código viejo en memoria. Nunca tumba el bucle principal: todo va
-    envuelto en try/except."""
+    envuelto en try/except.
+
+    REGLA (auditoría #71): la relanzada NUNCA mata una grabación. El
+    proceso viejo salía con os._exit(0) sin detener el Recorder y su
+    FFmpeg quedaba huérfano escribiendo en la carpeta de la sesión. Si
+    hay una grabación activa, el reinicio se DIFIERE: la huella no se
+    marca como aplicada y la siguiente revisión lo vuelve a intentar;
+    cuando la grabación termine, el reinicio se aplica solo."""
     try:
         time.sleep(20)
         while True:
@@ -336,7 +344,13 @@ def _hilo_actualizador(config_path):
                     print(f"Actualizador: {error}")
                 if resultado.get("reiniciar"):
                     huella = resultado.get("huella")
-                    if _reinicio_ya_aplicado(huella):
+                    if hay_grabacion is not None and hay_grabacion():
+                        print("Actualizador: hay una grabación en curso; el "
+                              "reinicio para aplicar la actualización se "
+                              "difiere hasta que la grabación termine (la "
+                              "grabación NUNCA se detiene por una "
+                              "actualización).")
+                    elif _reinicio_ya_aplicado(huella):
                         print("Actualizador: esta actualización ya provocó "
                               "un reinicio antes; NO se reinicia en bucle. "
                               "Si el problema sigue, reinicia el motor a mano.")
@@ -353,17 +367,47 @@ def _hilo_actualizador(config_path):
     except Exception as e:
         print(f"Actualizador: hilo detenido por un error: {e}")
 
+def _detener_todo():
+    """Cierre limpio del motor: detiene radares y grabaciones en curso
+    para que ningún FFmpeg quede huérfano al salir (antes, un Ctrl+C o el
+    cierre del proceso dejaba la captura escribiendo sin motor). Cada
+    parada va protegida: un fallo al detener una no impide las demás."""
+    for sid, radar in list(radares.items()):
+        try: radar.detener()
+        except Exception: pass
+    radares.clear()
+    for sid, rec in list(grabaciones.items()):
+        try: rec.stop()
+        except Exception:
+            try: rec.detener_flag.set()
+            except Exception: pass
+    grabaciones.clear()
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", default="worker-config.json")
     args = ap.parse_args()
     cfg = json.loads(Path(args.config).read_text(encoding="utf-8-sig"))
     _configurar_log(cfg)
+    # Instancia única (auditoría #71): dos motores en la misma PC se pisan
+    # los trabajos y las carpetas de sesión. El bloqueo es del SO (ver
+    # instancia.py): se espera hasta 15 s porque en la relanzada del
+    # actualizador el motor nuevo arranca mientras el viejo aún sale.
+    # _bloqueo debe vivir en una variable hasta el fin del proceso: si se
+    # perdiera la referencia, el GC cerraría el handle y con él el bloqueo.
+    _bloqueo = instancia.adquirir(_carpeta_datos(cfg), espera_s=15)
+    if _bloqueo is None:
+        print("Motor JDM Viral Clips AI: YA hay otro motor corriendo en "
+              "esta PC. Este arranque se cierra sin tocar nada; el motor "
+              "que ya corre sigue siendo el único.")
+        return
     # actualizar=false solo en esta PC: evita que el manifiesto publicado
     # reemplace el motor local que todavía no está en el repositorio remoto.
     if cfg.get("actualizar", True):
         try:
-            threading.Thread(target=_hilo_actualizador, args=(args.config,),
+            threading.Thread(target=_hilo_actualizador,
+                             args=(args.config,),
+                             kwargs={"hay_grabacion": lambda: bool(grabaciones)},
                              daemon=True).start()
         except Exception as e:
             print(f"Actualizador: no se pudo iniciar el hilo: {e}")
@@ -376,28 +420,31 @@ def main():
         iniciar_cola(cfg, api, lambda: bool(grabaciones))
     except Exception as e:
         print(f"Subtítulos: la cola no arrancó ({e}). La grabación y el radar siguen igual.")
-    while True:
-        try:
-            api.heartbeat(VERSION); api.sincronizar_pendientes()
-            for sid_b, rec_b in list(grabaciones.items()):
-                try: api.reportar_progreso(sid_b, rec_b.bytes_en_disco())
-                except Exception: pass
-            job = api.reclamar()
-            if job:
-                print(f"Trabajo {job['id']}: {job['type']}")
-                try:
-                    resultado = procesar(job, cfg, api)
-                    detalle = api.completar_detalle(job["id"], resultado)
-                    # Sin detener nada: la copia de cada clip nuevo sube aquí,
-                    # en el mismo flujo del bucle de trabajos.
-                    _subir_copias_automaticas(resultado, detalle, api)
-                except Exception as e: api.fallar(job["id"], e)
-            else:
-                time.sleep(5)
-        except KeyboardInterrupt:
-            break
-        except Exception as e:
-            print(f"Error de red/API (se reintenta): {e}"); time.sleep(10)
+    try:
+        while True:
+            try:
+                api.heartbeat(VERSION); api.sincronizar_pendientes()
+                for sid_b, rec_b in list(grabaciones.items()):
+                    try: api.reportar_progreso(sid_b, rec_b.bytes_en_disco())
+                    except Exception: pass
+                job = api.reclamar()
+                if job:
+                    print(f"Trabajo {job['id']}: {job['type']}")
+                    try:
+                        resultado = procesar(job, cfg, api)
+                        detalle = api.completar_detalle(job["id"], resultado)
+                        # Sin detener nada: la copia de cada clip nuevo sube aquí,
+                        # en el mismo flujo del bucle de trabajos.
+                        _subir_copias_automaticas(resultado, detalle, api)
+                    except Exception as e: api.fallar(job["id"], e)
+                else:
+                    time.sleep(5)
+            except KeyboardInterrupt:
+                break
+            except Exception as e:
+                print(f"Error de red/API (se reintenta): {e}"); time.sleep(10)
+    finally:
+        _detener_todo()
 
 if __name__ == "__main__":
     main()
