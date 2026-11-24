@@ -575,7 +575,7 @@ function accionesClip(r, prefijo) {
     ? `<button onclick="verClip(${r.id}, '${prefijo}')">VER</button>`
     : `<button onclick="pedirCopia(${r.id}, 'ver', '${prefijo}')">VER</button>`;
   const bajar = r.tiene_copia_servidor
-    ? `<button onclick="descargarCopia(${r.id})">DESCARGAR</button>`
+    ? `<button onclick="descargarCopia(${r.id}, '${prefijo}')">DESCARGAR</button>`
     : `<button onclick="pedirCopia(${r.id}, 'descargar', '${prefijo}')">DESCARGAR</button>`;
   return ver + " " + bajar +
     `<span id="${prefijo}-estado-${r.id}" class="nota"></span><div id="${prefijo}-video-${r.id}"></div>`;
@@ -588,39 +588,91 @@ function nombreLocalClip(c) {
   const p = String((c && c.file_path) || "").replace(/\\/g, "/");
   return p.split("/").pop() || ("clip-" + (c ? c.id : "x") + ".mp4");
 }
-function descargarCopia(id) {
+function avisarDescarga(id, prefijo, texto) {
+  // El aviso va junto al botón del clip (visible en la sección actual) y
+  // también al mensaje general: antes los errores de descarga solo iban a
+  // #clips-msg, que en el Centro LIVE queda fuera de pantalla, y el clic
+  // parecía no hacer nada (reporte de Jose, 2026-11-23).
+  const est = prefijo ? document.getElementById(prefijo + "-estado-" + id) : null;
+  if (est) est.textContent = texto;
+  if ($("clips-msg")) $("clips-msg").textContent = texto;
+}
+function guardarBlobDescarga(b, nombre) {
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(b);
+  a.download = nombre;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+}
+async function descargarCopia(id, prefijo) {
   const c = clipsCache.find(x => x.id == id);
-  fetch(`/clips/${id}/download`, {headers: {"Authorization": "Bearer " + token}}).then(async r => {
-    if (r.status === 404) { descargarArchivoServidor(id); return; }
-    if (!r.ok) {
-      const d = await r.json().catch(() => ({}));
-      if ($("clips-msg")) $("clips-msg").textContent = d.detail || "Este clip no está disponible para descargar.";
+  avisarDescarga(id, prefijo, "Descargando…");
+  try {
+    const r = await fetch(`/clips/${id}/download`, {headers: {"Authorization": "Bearer " + token}});
+    if (r.status === 404) {
+      // Respaldo: la copia servible por /archivo. Si tampoco está, la
+      // copia se perdió en el servidor (disco efímero): se re-pide la
+      // subida a la PC en vez de morir en silencio.
+      const ok = await descargarArchivoServidor(id);
+      if (ok) { avisarDescarga(id, prefijo, ""); return; }
+      avisarDescarga(id, prefijo, "La copia ya no estaba en el servidor: pidiendo otra a tu PC…");
+      pedirCopia(id, "descargar", prefijo || "clip");
       return;
     }
-    const b = await r.blob();
+    if (!r.ok) {
+      const d = await r.json().catch(() => ({}));
+      avisarDescarga(id, prefijo, d.detail || "Este clip no está disponible para descargar.");
+      return;
+    }
+    // Descarga con progreso visible: antes se bajaba el archivo entero
+    // con blob() sin mostrar nada, y un clip de decenas de MB parecía
+    // «no hace nada» durante minutos.
+    const total = parseInt(r.headers.get("Content-Length") || "0", 10);
     const disp = r.headers.get("Content-Disposition") || "";
     const m = /filename="?([^";]+)"?/.exec(disp);
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(b);
-    a.download = (m && m[1]) || nombreLocalClip(c);
-    a.click();
-  }).catch(e => { if ($("clips-msg")) $("clips-msg").textContent = "No se pudo descargar el clip: " + e.message; });
+    const nombre = (m && m[1]) || nombreLocalClip(c);
+    let b;
+    if (r.body && r.body.getReader) {
+      const lector = r.body.getReader();
+      const partes = [];
+      let recibidos = 0;
+      for (;;) {
+        const {done, value} = await lector.read();
+        if (done) break;
+        partes.push(value); recibidos += value.length;
+        const mb = (recibidos / 1048576).toFixed(1);
+        avisarDescarga(id, prefijo, total
+          ? `Descargando… ${mb} MB (${Math.min(100, Math.round(recibidos * 100 / total))}%)`
+          : `Descargando… ${mb} MB`);
+      }
+      b = new Blob(partes, {type: "video/mp4"});
+    } else {
+      b = await r.blob();
+    }
+    guardarBlobDescarga(b, nombre);
+    avisarDescarga(id, prefijo, "Descarga completada.");
+  } catch (e) {
+    avisarDescarga(id, prefijo, "No se pudo descargar el clip: " + e.message);
+  }
 }
-function descargarArchivoServidor(id) {
-  fetch(`/clips/${id}/archivo?descargar=1`, {headers: {"Authorization": "Bearer " + token}}).then(async r => {
-    if (!r.ok) return;
+async function descargarArchivoServidor(id) {
+  // Devuelve true si el archivo bajó. NUNCA traga el fallo en silencio:
+  // quien llama decide el siguiente paso (re-pedir la copia a la PC).
+  try {
+    const r = await fetch(`/clips/${id}/archivo?descargar=1`, {headers: {"Authorization": "Bearer " + token}});
+    if (!r.ok) return false;
     const b = await r.blob();
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(b);
-    a.download = nombreLocalClip(clipsCache.find(x => x.id == id));
-    a.click();
-  }).catch(() => {});
+    guardarBlobDescarga(b, nombreLocalClip(clipsCache.find(x => x.id == id)));
+    return true;
+  } catch (e) {
+    return false;
+  }
 }
 async function pedirCopia(id, accion, prefijo) {
   const est = document.getElementById(prefijo + "-estado-" + id);
   try { const d = await api("POST", `/clips/${id}/solicitar-subida`);
     if (d.tiene_copia_servidor || d.estado === "con_copia") {
-      if (accion === "ver") verClip(id, prefijo); else descargarCopia(id);
+      if (accion === "ver") verClip(id, prefijo); else descargarCopia(id, prefijo);
       return;
     }
     if (est) est.textContent = d.hay_trabajador === false
@@ -643,7 +695,7 @@ function seguirSubida(id, accion, jobId, prefijo) {
       if (c && c.tiene_copia_servidor) {
         clearInterval(reg.iv); delete subidasEnCurso[id];
         if (reg.prefijo === "liveclip") await cargarClipsSesion(); else await cargarClips();
-        if (reg.accion === "ver") verClip(id, reg.prefijo); else descargarCopia(id);
+        if (reg.accion === "ver") verClip(id, reg.prefijo); else descargarCopia(id, reg.prefijo);
         return;
       }
       if (reg.jobId) {
@@ -702,7 +754,7 @@ function tarjetaClip(c) {
       <div class="bib-acciones">
         <button type="button" class="${subsActivos(c) ? "subs-on" : "sec"} subs-toggle" onclick="alternarSubtitulos(${c.id})">SUBTÍTULOS ${subsActivos(c) ? "ON" : "OFF"}</button>
         <button type="button" onclick="verClip(${c.id}, 'clip')">▶ VER CLIP</button>
-        <button type="button" class="sec" onclick="descargarCopia(${c.id})">DESCARGAR CLIP</button>
+        <button type="button" class="sec" onclick="descargarCopia(${c.id}, 'clip')">DESCARGAR CLIP</button>
         <button type="button" class="sec" onclick="descargarSubtitulado(${c.id})">DESCARGAR CON SUBTÍTULOS</button>
         <button type="button" class="sec" onclick="pedirEliminarClip(${c.id})">ELIMINAR CLIP</button>
       </div>

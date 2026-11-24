@@ -934,7 +934,16 @@ def claim_job(w=Depends(worker_auth), s=Depends(db)):
     # Reaper: antes de entregar trabajo nuevo se cierran los «procesando»
     # abandonados (ver JOB_PROCESANDO_CADUCA_S). Nunca bloquea el reclamo.
     _expirar_jobs_procesando(s)
-    j = s.query(Job).filter_by(status="pendiente").order_by(Job.id).first()
+    # Prioridad de reclamo: «subir_clip» va primero. Es el trabajo que el
+    # usuario está esperando en pantalla para VER/DESCARGAR un clip, y en
+    # el bucle síncrono del trabajador quedaba detrás de trabajos pesados
+    # (generar_clip, analizar_video) durante minutos: la descarga parecía
+    # no responder (reporte de Jose, 2026-11-23). Dentro de cada grupo se
+    # mantiene el orden de llegada (id).
+    from sqlalchemy import case as _case
+    _prio = _case((Job.type == "subir_clip", 0), else_=1)
+    j = (s.query(Job).filter_by(status="pendiente")
+         .order_by(_prio, Job.id).first())
     if not j: return {"job": None}
     j.status = "procesando"; j.attempts += 1; j.worker_id = w.id; s.commit()
     return {"job": {"id": j.id, "type": j.type, "payload": json.loads(j.payload or "{}")}}
