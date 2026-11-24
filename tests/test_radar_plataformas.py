@@ -14,7 +14,10 @@ Parte 2 — radar en vivo:
   GET /events?session_id=.
 - Humo e2e: sesión + señal HLS local «en vivo» (productor -re); SIN detener
   la grabación aparecen eventos en la API y un clip 1080x1920 de 60–120 s;
-  al detener se crea el Project y el radar termina."""
+  al detener, el radar termina y — desde la v1.3.11 (política de disco de
+  Jose: solo se guardan los clips) — NO queda película ni Project de la
+  sesión en vivo: grabacion_completa es None y la carpeta queda sin
+  segmentos (antes este humo fijaba lo contrario: película + Project)."""
 import json
 import subprocess
 import threading
@@ -404,19 +407,29 @@ def test_radar_en_vivo_e2e(tmp_path):
         print(f"\nRADAR E2E: evento {ev['start_s']}–{ev['end_s']}s score {ev['score']}; "
               f"clip {dur:.1f}s 1080x1920; latencia momento->clip ≈ {latencia:.1f}s")
         # Detener por el flujo real de la API: job -> trabajador -> complete.
+        # v1.3.11: la sesión es EN VIVO -> no hay película que registrar
+        # como Project; la API salta ese paso con grabacion_completa None
+        # y la nota lo explica. Solo quedan los clips (verificados arriba).
         r = client.post(f"/sessions/{sid}/stop", headers=h)
         job = _reclamar(wh, r.json()["job_id"])
         res2 = worker_mod.procesar(job, cfg, puente)
-        assert res2["grabacion_completa"] and Path(res2["grabacion_completa"]).exists()
+        assert res2["estado"] == "detenida"
+        assert res2["grabacion_completa"] is None
+        assert "clips" in res2["nota"]
+        carpeta_sesion = Path(cfg["carpeta_grabaciones"]) / f"sesion-{sid}"
+        assert not (carpeta_sesion / "grabacion_completa.mp4").exists()
+        assert list(carpeta_sesion.glob("seg_*.mp4")) == [], \
+            "al detener el en vivo quedaron segmentos en la carpeta de la sesión"
         r = client.post(f"/jobs/{job['id']}/complete", json={"result": res2}, headers=wh)
         assert r.status_code == 200, r.text
         assert sid not in worker_mod.radares and sid not in worker_mod.grabaciones
         s = apimain.SessionLocal()
         try:
-            projs = s.query(apimain.Project).filter_by(file_path=res2["grabacion_completa"]).all()
+            projs = s.query(apimain.Project).filter(
+                apimain.Project.file_path.like(f"%sesion-{sid}%")).all()
         finally:
             s.close()
-        assert len(projs) == 1, "al detener no se creó el Project de la grabación"
+        assert projs == [], "una sesión en vivo NO se registra como proyecto (v1.3.11)"
     finally:
         rec = worker_mod.grabaciones.pop(sid, None)
         if rec:

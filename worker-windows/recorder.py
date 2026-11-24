@@ -9,7 +9,16 @@ sin que nadie lo gobernara. Ahora el Recorder anota el PID de su FFmpeg en
 ffmpeg.pid dentro de la carpeta de la sesión, y al arrancar una grabación
 nueva en esa carpeta se barre el huérfano anterior: solo se termina el
 proceso si sigue vivo Y es de verdad un ffmpeg (nunca otro programa que
-reutilizara el PID)."""
+reutilizara el PID).
+
+Retención (v1.3.11, orden de Jose 2026-11-23: «solo guarda los clips, no
+el vídeo completo, así no se me llena el disco duro»): hasta la v1.3.10
+NINGÚN segmento se borraba durante la grabación (la poda del buffer
+exigía la película ya unida y nadie la llamaba en vivo) y al detener se
+creaba siempre grabacion_completa.mp4 dejando TAMBIÉN los segmentos:
+~0,9-1,6 GB por hora, el doble tras detener. Ahora, solo en vivo:
+poda rodante de segmentos contra VENTANA_PODA_S y stop() sin película
+(ver podar_rodante, stop y descartar_segmentos)."""
 import json, os, subprocess, threading, time
 from pathlib import Path
 from procesos import SIN_VENTANA
@@ -17,6 +26,17 @@ from buffer import BufferCircular
 
 SEG = 10
 ARCHIVO_PID = "ffmpeg.pid"
+# Ventana de segmentos que se conserva durante una grabación EN VIVO
+# (único sitio donde se define; Recorder la acepta como parámetro y el
+# trabajador la puede sobreescribir con la clave «ventana_poda_s»).
+# Debe cubrir con margen todo lo que el radar puede necesitar hacia
+# atrás: su ventana de análisis cierra con el primer segmento flojo y el
+# clip llega a 120 s con pre 30 / post 25 de contexto (clipper), más el
+# intervalo del radar (30 s) y el tiempo de generar el clip: lo
+# estrictamente necesario ronda 4 minutos; 45 minutos dan ~11x de
+# margen y acotan la carpeta de la sesión a ~0,7-1,2 GB.
+VENTANA_PODA_S = 45 * 60
+INTERVALO_PODA_S = 20
 
 def _pid_vivo(pid):
     """True si el proceso `pid` existe ahora mismo. Nunca lanza."""
@@ -147,13 +167,17 @@ def _cmd_grabar(fuente, outdir, start_number=0, en_vivo=False):
     return cmd
 
 class Recorder:
-    def __init__(self, fuente, outdir, buffer_min=5, en_vivo=True, max_reintentos=5, resolver=None):
+    def __init__(self, fuente, outdir, buffer_min=5, en_vivo=True, max_reintentos=5, resolver=None,
+                 ventana_poda_s=VENTANA_PODA_S):
         # resolver (opcional): callable sin argumentos que devuelve una URL de
         # señal FRESCA. Las señales resueltas de plataformas rotan/caducan;
         # en cada reconexión se pide una nueva en vez de reutilizar la muerta.
         # Sin resolver, el comportamiento es idéntico al histórico.
         self.fuente, self.outdir = fuente, Path(outdir)
         self.resolver = resolver
+        self.ventana_poda_s = float(ventana_poda_s)
+        self._max_indice = -1   # mayor índice de segmento visto en la corrida
+        self._ultima_poda = 0.0
         self.outdir.mkdir(parents=True, exist_ok=True)
         self.buffer = BufferCircular(self.outdir, minutos=buffer_min)
         # Corrida nueva = manifest nuevo: la carpeta de la sesión se
@@ -206,6 +230,7 @@ class Recorder:
         if not self._archivo_estable(p):
             return
         idx = int(p.stem.split("_")[1])
+        if idx > self._max_indice: self._max_indice = idx
         d = duracion_real(p)
         self.buffer.registrar(str(p), idx, round(self._cursor, 3), round(d, 3))
         self._cursor += d; self._finalizados.add(p.name)
@@ -222,6 +247,68 @@ class Recorder:
         for p in self._segmentos_corrida():
             if p.name not in self._finalizados:
                 self._finalizar(p)
+    def podar_rodante(self):
+        """Poda rodante de segmentos DURANTE la grabación en vivo
+        (v1.3.11): conserva solo la ventana reciente VENTANA_PODA_S y
+        borra el resto, para que una grabación 24/7 no llene el disco
+        (antes: ~0,9-1,6 GB por hora, sin límite). Solo aplica en vivo:
+        una fuente de archivo se segmenta a toda velocidad y su película
+        se une al terminar — podarla por línea de tiempo la rompería.
+
+        Un segmento solo se borra si ya quedó fuera de la ventana Y no
+        está en uso por un clip en curso (buffer.podar_rodante). Además barre
+        los seg_*.mp4 sueltos que no están en el manifest (restos de
+        corridas anteriores o parciales huérfanos) cuando su mtime ya
+        salió de la ventana: el segmento que el FFmpeg está escribiendo
+        ahora tiene mtime fresco y nunca cae aquí. La grabación no se
+        detiene ni se toca: solo se borran archivos ya cerrados y viejos.
+        Devuelve cuántos archivos borró."""
+        if not self.en_vivo:
+            return 0
+        borrados = 0
+        entradas = self.buffer.segmentos()
+        if entradas:
+            fin = max(e["inicio_s"] + e["duracion_s"] for e in entradas)
+            borrados += self.buffer.podar_rodante(self.ventana_poda_s, fin)
+        en_manifest = {Path(e["path"]).name for e in self.buffer.segmentos()}
+        corte = time.time() - self.ventana_poda_s
+        for p in self._segmentos():
+            if p.name in en_manifest:
+                continue
+            try:
+                if p.stat().st_mtime < corte:
+                    p.unlink(missing_ok=True)
+                    borrados += 1
+                    self._finalizados.discard(p.name)
+            except OSError:
+                continue
+        return borrados
+    def descartar_segmentos(self):
+        """Cierre de la política de disco en vivo (v1.3.11): al detener
+        una sesión en vivo no queda NI película NI segmentos — solo los
+        clips generados (que viven en la carpeta de clips, intactos).
+        Borra los segmentos de ESTA corrida y reinicia el manifest. Si
+        alguna ruta hubiera creado grabacion_completa.mp4 durante ESTA
+        corrida (mtime posterior a su inicio), también se borra; una
+        película de una corrida ANTERIOR no se toca (es del usuario).
+        Se llama DESPUÉS de la pasada final del radar, que aún necesita
+        los segmentos para cerrar su última ventana. Devuelve cuántos
+        segmentos borró."""
+        n = 0
+        for p in self._segmentos_corrida():
+            try:
+                p.unlink(missing_ok=True); n += 1
+            except OSError:
+                pass
+        film = self.outdir / "grabacion_completa.mp4"
+        try:
+            if film.is_file() and film.stat().st_mtime >= self._t_inicio - 1.0:
+                film.unlink(missing_ok=True)
+        except OSError:
+            pass
+        self._finalizados.clear()
+        self.buffer.reiniciar()
+        return n
     def _refrescar_fuente(self):
         """Pide una URL fresca al resolver (si hay). Si el resolver falla, se
         conserva la última URL conocida y el reintento sigue su curso."""
@@ -261,6 +348,14 @@ class Recorder:
             while self.proc.poll() is None and not self.detener_flag.is_set():
                 time.sleep(0.5)
                 self._registrar_nuevos(vistos)
+                # Poda rodante (v1.3.11): cada INTERVALO_PODA_S se borran
+                # los segmentos que ya salieron de la ventana. Va en este
+                # mismo hilo: nunca compite con la reconexión ni detiene
+                # la grabación (solo borra archivos cerrados y viejos).
+                if time.time() - self._ultima_poda >= INTERVALO_PODA_S:
+                    self._ultima_poda = time.time()
+                    try: self.podar_rodante()
+                    except Exception: pass
             self._borrar_pid()
             self._registrar_nuevos(vistos)
             if self.detener_flag.is_set(): break
@@ -269,7 +364,11 @@ class Recorder:
             if not self.en_vivo or not segs: break
             self.reintentos += 1
             if self.reintentos > self.max_reintentos: break
-            start_number = len(segs)
+            # Nunca reutilizar el índice de un segmento ya podado: su
+            # nombre sigue en _finalizados y el nuevo se saltaría el
+            # registro (el radar no lo vería). Sin poda, len(segs) manda
+            # como siempre.
+            start_number = max(len(segs), self._max_indice + 1)
             self._refrescar_fuente()  # señal de plataforma: URL fresca, no la caducada
             time.sleep(2)
         # Un archivo finito ya terminó: une ahora, mientras los segmentos siguen
@@ -348,7 +447,13 @@ class Recorder:
             print(f"Grabación: se terminó un FFmpeg huérfano de una corrida anterior en {self.outdir}.")
         self._t_inicio = time.time()
         self.hilo = threading.Thread(target=self._bucle, daemon=True); self.hilo.start()
-    def stop(self):
+    def stop(self, crear_pelicula=True):
+        """Detiene la captura y finaliza los segmentos. Con
+        crear_pelicula=False NO se une la grabación completa (política
+        de disco en vivo de la v1.3.11: solo se conservan los clips) y
+        devuelve None; el descarte de los segmentos es paso aparte
+        (descartar_segmentos), porque la pasada final del radar aún los
+        necesita después de parar el Recorder."""
         self.detener_flag.set()
         fh = getattr(self, "_log_fh", None)
         if fh:
@@ -360,6 +465,8 @@ class Recorder:
             except subprocess.TimeoutExpired: self.proc.kill()
         if self.hilo: self.hilo.join(timeout=15)
         self._finalizar_todos()
+        if not crear_pelicula:
+            return None
         return self.unir()
     def bytes_en_disco(self):
         """Bytes de ESTA captura: la suma de los segmentos en disco.

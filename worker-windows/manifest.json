@@ -2,7 +2,7 @@
   "files": {
     "actualizador.py": "020bce83d887c4005a86a094f4c84e30ad593ea2c0ab58b0fa4389efab77e4d4",
     "analyzer.py": "cc2f7202ce36f1b796ac9c33f436a84848bae134618b613c1570a8d5c7e5ad08",
-    "buffer.py": "6f21644c2cf6c0f24c7ae3ba2f32431f1d40e026f5fbfe9ac1ac0794b2b7776d",
+    "buffer.py": "fb22bef60145e831dcbd73a91f3063c0b0a0b99c867e295b3374c7bf64383e7d",
     "clipper.py": "531f3fc49895f0f6251a7ddf4bf92caf0c1704acc981373ea7f78f3136831e29",
     "dedup.py": "5844ec67aa90de00baa151525a26e030ea3e033b7f7297a74634ea73ec63536b",
     "editor.py": "e803f7c3929cd71ac36161b83154e90da35cc6722847c0fa5dfda3d727c3f338",
@@ -10,8 +10,8 @@
     "install-worker.ps1": "05b0ac2abc25d9b0ccc31016270a7d167a650a2d431e4ac907a3bac65bfa0553",
     "instancia.py": "c5f46b46a3f8b29974938b1d6fa21cb42090d4ffd2db9dd95bdee00a55bc117e",
     "procesos.py": "ffb78f877a2dc6ebe74be62d979634b9cac3d044dde548ab305b331ce50385e6",
-    "radar.py": "56340a27269f18c27d3b44006a639543fca1f3abb9cf50d2af6ef3787c8daeeb",
-    "recorder.py": "c79a0ce296555b957705485472b05aa83dfd292e1e6dac81892ca490565b3f89",
+    "radar.py": "127dfc5cd010496f78e5b4fda3babeaba0b103a022a40dc0ae2b292cbb5c9c36",
+    "recorder.py": "12b6ec92839b4240d2ab9db8488c0cbecef376e5f077b4503a7252d2373b4b33",
     "requirements.txt": "ac30d731b1cc532e45a2df0ba9c065375592e66de867fbc6ea6c0c67fefca940",
     "resolver.py": "4f35f25fea386e341c847192d5f0f1ba86120f8e56c899ccb0936dd422cb7dc5",
     "subtitulos.py": "00436c76593faeb99923c38c930a0255792fd8c707aaf6c6151bc1e92eb179eb",
@@ -20,7 +20,7 @@
     "transcribe.py": "f2f43819d34833ec1a4f538a02944f5735b03c6a00828ee2d6228216d73167d0",
     "viral.py": "5fc32a546c762d16564c7ae040570c023004cf10e3b4910d15bc76b00734888c",
     "vision.py": "a57c2b142ba15ab12b61b3fe4c283c73a0048ec78db9e3da7c07519cbc5d37a0",
-    "worker.py": "6df4027f41a4e84162358163601a11a232d4eb86d61f3d21e0d5bc482f7ce6d0"
+    "worker.py": "5a93a1687b70f61d0cc3bfa9b0bad64e379fc57f4072a22d16edfde429512efe"
   },
-  "version": "1.3.9"
+  "version": "1.3.11"
 }

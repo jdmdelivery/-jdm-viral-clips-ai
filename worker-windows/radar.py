@@ -40,6 +40,7 @@ class RadarSesion:
         self.hilo = None
         self._puntuados = set()           # índices de segmento ya puntuados
         self._ventana = None              # momento caliente en curso (dict) o None
+        self._ventana_indices = set()     # segmentos de la ventana abierta (en uso)
         self.reportados = []              # intervalos ya reportados (dedup local)
         self._pendientes = []             # reportes que la red no aceptó aún
         self.latencias_s = []             # latencia momento->clip observada (s)
@@ -97,6 +98,18 @@ class RadarSesion:
         score, desglose = viral.puntuar(senales, self.modo)
         return score, desglose, viral.clasificar(senales, self.modo)
 
+    # ---------- uso compartido con la poda rodante (v1.3.11) ----------
+    def _marcar_en_uso(self, indices):
+        """La poda rodante del Recorder nunca borra un segmento en uso:
+        ni los de la ventana caliente abierta ni los que un clip está
+        concatenando en este instante (borrarlos a mitad de lectura
+        rompería el clip)."""
+        try: self.recorder.buffer.marcar_en_uso(set(indices))
+        except Exception: pass
+    def _liberar_en_uso(self, indices):
+        try: self.recorder.buffer.liberar_en_uso(set(indices))
+        except Exception: pass
+
     # ---------- clip desde segmentos (sin tocar la grabación) ----------
     def _generar_clip(self, ventana, fin_total):
         ini, fin = contexto(ventana["start_s"], ventana["end_s"], fin_total,
@@ -105,36 +118,42 @@ class RadarSesion:
                     if e["inicio_s"] + e["duracion_s"] > ini and e["inicio_s"] < fin]
         if not entradas: return None
         entradas.sort(key=lambda e: e["indice"])
-        base = entradas[0]["inicio_s"]
-        trabajo = self.carpeta_clips / f"sesion-{self.session_id}" / "_radar"
-        trabajo.mkdir(parents=True, exist_ok=True)
-        # Concat de los segmentos que cubren la ventana (archivos ya cerrados:
-        # leerlos no interfiere con el FFmpeg que sigue grabando).
-        lista = trabajo / f"concat-{int(ini)}-{int(fin)}.txt"
-        lista.write_text("".join(f"file '{Path(e['path']).resolve()}'\n" for e in entradas),
-                         encoding="utf-8")
-        unido = trabajo / f"ventana-{int(ini)}-{int(fin)}.mp4"
-        r = subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "concat", "-safe", "0",
-                            "-i", str(lista), "-c", "copy", str(unido)],
-                           capture_output=True, text=True, timeout=600, creationflags=SIN_VENTANA)
-        if r.returncode != 0 or not unido.exists():
-            raise RuntimeError(f"Concat de segmentos del radar falló: {r.stderr[-300:]}")
-        salida = (self.carpeta_clips / f"sesion-{self.session_id}"
-                  / f"clip-radar-{int(ventana['start_s'])}s.mp4")
-        salida.parent.mkdir(parents=True, exist_ok=True)
-        if salida.exists():
-            salida = salida.with_name(f"clip-radar-{int(ventana['start_s'])}s-{int(time.time())}.mp4")
-        exportar_clip(str(unido), max(0.0, ini - base), fin - base, salida, "9:16")
-        if not clip_tiene_video(salida):
-            raise RuntimeError("El clip del radar quedó sin video.")
-        thumb = miniatura(salida, 1, salida.with_suffix(".jpg"))
-        try: unido.unlink(missing_ok=True); lista.unlink(missing_ok=True)
-        except Exception: pass
-        # Los segmentos del momento quedan protegidos en el buffer circular.
-        try: self.recorder.buffer.proteger({e["indice"] for e in entradas})
-        except Exception: pass
-        return {"file_path": str(salida), "thumb_path": thumb, "format": "9:16",
-                "duration_s": round(fin - ini, 2), "score": ventana["score"]}
+        # Mientras el concat/export lee estos archivos, la poda rodante
+        # no puede borrarlos (quedan marcados en uso hasta terminar).
+        self._marcar_en_uso({e["indice"] for e in entradas})
+        try:
+            base = entradas[0]["inicio_s"]
+            trabajo = self.carpeta_clips / f"sesion-{self.session_id}" / "_radar"
+            trabajo.mkdir(parents=True, exist_ok=True)
+            # Concat de los segmentos que cubren la ventana (archivos ya cerrados:
+            # leerlos no interfiere con el FFmpeg que sigue grabando).
+            lista = trabajo / f"concat-{int(ini)}-{int(fin)}.txt"
+            lista.write_text("".join(f"file '{Path(e['path']).resolve()}'\n" for e in entradas),
+                             encoding="utf-8")
+            unido = trabajo / f"ventana-{int(ini)}-{int(fin)}.mp4"
+            r = subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "concat", "-safe", "0",
+                                "-i", str(lista), "-c", "copy", str(unido)],
+                               capture_output=True, text=True, timeout=600, creationflags=SIN_VENTANA)
+            if r.returncode != 0 or not unido.exists():
+                raise RuntimeError(f"Concat de segmentos del radar falló: {r.stderr[-300:]}")
+            salida = (self.carpeta_clips / f"sesion-{self.session_id}"
+                      / f"clip-radar-{int(ventana['start_s'])}s.mp4")
+            salida.parent.mkdir(parents=True, exist_ok=True)
+            if salida.exists():
+                salida = salida.with_name(f"clip-radar-{int(ventana['start_s'])}s-{int(time.time())}.mp4")
+            exportar_clip(str(unido), max(0.0, ini - base), fin - base, salida, "9:16")
+            if not clip_tiene_video(salida):
+                raise RuntimeError("El clip del radar quedó sin video.")
+            thumb = miniatura(salida, 1, salida.with_suffix(".jpg"))
+            try: unido.unlink(missing_ok=True); lista.unlink(missing_ok=True)
+            except Exception: pass
+            # Los segmentos del momento quedan protegidos en el buffer circular.
+            try: self.recorder.buffer.proteger({e["indice"] for e in entradas})
+            except Exception: pass
+            return {"file_path": str(salida), "thumb_path": thumb, "format": "9:16",
+                    "duration_s": round(fin - ini, 2), "score": ventana["score"]}
+        finally:
+            self._liberar_en_uso({e["indice"] for e in entradas})
 
     # ---------- reporte a la API ----------
     def _reportar(self, eventos, clips):
@@ -179,30 +198,37 @@ class RadarSesion:
         Si falla el clip, el evento igual se reporta (sin clip) — el momento
         detectado no se pierde; si falla la red, queda en pendientes."""
         v, self._ventana = self._ventana, None
+        indices, self._ventana_indices = self._ventana_indices, set()
         if v is None: return
-        candidato = {"start_s": v["start_s"], "end_s": v["end_s"]}
-        for rep in self.reportados:
-            if _solape_ratio(candidato, rep) > 0.70:
-                return  # mismo momento ya reportado: no repetir
-        evento = {"type": v["type"], "mode": self.modo, "start_s": v["start_s"],
-                  "end_s": v["end_s"], "score": v["score"], "breakdown": v["breakdown"]}
-        clips = []
         try:
-            clip = self._generar_clip(v, self._fin_total())
-            if clip:
-                tit = generar_titulos(v["type"], self.modo, v["score"])
-                clip.update({"title": tit["titulos"][0], "titles": tit, "subtitles": False})
-                clips.append({**clip, "event_index": 0})
-                if self.recorder.inicio:
-                    # Latencia momento->clip: del fin del momento (en el reloj
-                    # de la grabación) a tener el clip listo en disco.
-                    self.latencias_s.append(round(time.time() - (self.recorder.inicio + v["end_s"]), 1))
-        except Exception as e:
-            self.errores.append(f"clip del radar: {e}")
-        if self._reportar([evento], clips):
-            self.reportados.append(candidato)
-        else:
-            self.reportados.append(candidato)  # ya salió de aquí: no duplicar en el reintento local
+            candidato = {"start_s": v["start_s"], "end_s": v["end_s"]}
+            for rep in self.reportados:
+                if _solape_ratio(candidato, rep) > 0.70:
+                    return  # mismo momento ya reportado: no repetir
+            evento = {"type": v["type"], "mode": self.modo, "start_s": v["start_s"],
+                      "end_s": v["end_s"], "score": v["score"], "breakdown": v["breakdown"]}
+            clips = []
+            try:
+                clip = self._generar_clip(v, self._fin_total())
+                if clip:
+                    tit = generar_titulos(v["type"], self.modo, v["score"])
+                    clip.update({"title": tit["titulos"][0], "titles": tit, "subtitles": False})
+                    clips.append({**clip, "event_index": 0})
+                    if self.recorder.inicio:
+                        # Latencia momento->clip: del fin del momento (en el reloj
+                        # de la grabación) a tener el clip listo en disco.
+                        self.latencias_s.append(round(time.time() - (self.recorder.inicio + v["end_s"]), 1))
+            except Exception as e:
+                self.errores.append(f"clip del radar: {e}")
+            if self._reportar([evento], clips):
+                self.reportados.append(candidato)
+            else:
+                self.reportados.append(candidato)  # ya salió de aquí: no duplicar en el reintento local
+        finally:
+            # La ventana ya se procesó: sus segmentos dejan de estar en
+            # uso y la poda rodante podrá borrarlos cuando salgan de la
+            # ventana (los del clip generado quedan protegidos aparte).
+            self._liberar_en_uso(indices)
 
     # ---------- pasada / bucle ----------
     def pasada(self, incluir_ultimo=False):
@@ -223,10 +249,16 @@ class RadarSesion:
                     self._ventana = {"start_s": entrada["inicio_s"],
                                      "end_s": entrada["inicio_s"] + entrada["duracion_s"],
                                      "score": score, "breakdown": desglose, "type": tipo}
+                    self._ventana_indices = {entrada["indice"]}
                 else:
                     self._ventana["end_s"] = entrada["inicio_s"] + entrada["duracion_s"]
+                    self._ventana_indices.add(entrada["indice"])
                     if score > self._ventana["score"]:
                         self._ventana.update({"score": score, "breakdown": desglose, "type": tipo})
+                # La ventana abierta marca sus segmentos en uso: la poda
+                # rodante no puede borrar el inicio de un momento que
+                # aún no se ha cerrado ni cortado.
+                self._marcar_en_uso({entrada["indice"]})
             elif self._ventana is not None:
                 self._cerrar_ventana()
         return n

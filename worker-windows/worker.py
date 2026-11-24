@@ -5,12 +5,12 @@ Uso: python worker.py --config worker-config.json   (ver README.md)"""
 import argparse, json, os, subprocess, sys, threading, time
 from pathlib import Path
 
-VERSION = "1.3.9"
+VERSION = "1.3.11"
 sys.path.insert(0, str(Path(__file__).parent))
 from procesos import SIN_VENTANA
 import instancia
 from sync import ApiClient
-from recorder import Recorder
+from recorder import Recorder, VENTANA_PODA_S
 from analyzer import analizar_video
 from resolver import resolver_fuente, es_pagina_plataforma, es_archivo_local
 from radar import RadarSesion
@@ -70,7 +70,8 @@ def procesar(job, cfg, api=None):
         local = es_archivo_local(senal)
         refrescar = None if local or not es_pagina_plataforma(url) else (lambda: resolver_fuente(url))
         rec = Recorder(senal, Path(cfg["carpeta_grabaciones"]) / f"sesion-{sid}",
-                       buffer_min=cfg.get("buffer_min", 5), en_vivo=not local, resolver=refrescar)
+                       buffer_min=cfg.get("buffer_min", 5), en_vivo=not local, resolver=refrescar,
+                       ventana_poda_s=cfg.get("ventana_poda_s", VENTANA_PODA_S))
         rec.start()
         ok, info = rec.esperar_datos(timeout=float(cfg.get("espera_captura_s", 30)))
         if not ok:
@@ -108,11 +109,23 @@ def procesar(job, cfg, api=None):
         sid = p["session_id"]
         rec = grabaciones.pop(sid, None)
         if not rec: return {"estado": "sin_grabacion_activa"}
-        completa = rec.stop()
-        # El radar se detiene DESPUÉS de unir la grabación: su pasada final
-        # revisa también el último segmento y reporta lo que quedara abierto.
+        en_vivo = bool(getattr(rec, "en_vivo", False))
+        # En vivo (v1.3.11, política de disco de Jose): NO se une la
+        # película completa; solo se conservan los clips generados.
+        completa = rec.stop(crear_pelicula=not en_vivo)
+        # El radar se detiene DESPUÉS de parar el Recorder: su pasada
+        # final revisa también el último segmento y reporta lo que
+        # quedara abierto (aún necesita los segmentos en disco).
         radar = radares.pop(sid, None)
         if radar: radar.detener()
+        if en_vivo:
+            bytes_final = rec.bytes_en_disco()
+            rec.descartar_segmentos()
+            return {"estado": "detenida", "grabacion_completa": None,
+                    "nota": "Sesión en vivo detenida: solo se conservan los clips "
+                            "generados (política de disco de Jose); no se guardó "
+                            "la película completa ni los segmentos de la grabación.",
+                    "bytes": bytes_final}
         nota = ""
         if not completa:
             nota = getattr(rec, "error_union", "") or "La captura se detuvo, pero no quedó el archivo de la grabación completa."
@@ -400,7 +413,16 @@ def _detener_todo():
         except Exception: pass
     radares.clear()
     for sid, rec in list(grabaciones.items()):
-        try: rec.stop()
+        try:
+            if getattr(rec, "en_vivo", False):
+                # Misma política que al detener desde el panel (v1.3.11):
+                # sin película y sin segmentos; los radares ya hicieron
+                # su pasada final arriba, con los segmentos aún en disco.
+                rec.stop(crear_pelicula=False)
+                try: rec.descartar_segmentos()
+                except Exception: pass
+            else:
+                rec.stop()
         except Exception:
             try: rec.detener_flag.set()
             except Exception: pass
