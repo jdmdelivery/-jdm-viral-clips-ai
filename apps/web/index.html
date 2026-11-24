@@ -124,10 +124,69 @@
       <div id="clips" class="biblioteca"></div>
     </section>
 
+    <section data-sec="biblioteca" class="oculto">
+      <h3>📚 Biblioteca de recursos</h3>
+      <p class="nota">Memes, sonidos, efectos, transiciones y animaciones con licencia verificada. No se vuelve a descargar lo que ya está. Puedes agregar recursos propios.</p>
+      <div class="botones">
+        <button onclick="sincronizarBiblioteca()">⬇ SINCRONIZAR RECURSOS LEGALES</button>
+        <button class="sec" onclick="cargarBiblioteca()">ACTUALIZAR LISTA</button>
+      </div>
+      <div class="biblioteca-filtros">
+        <select id="bib-tipo" onchange="cargarBiblioteca()">
+          <option value="">Todos los tipos</option>
+          <option value="memes">Memes</option>
+          <option value="sonidos">Sonidos</option>
+          <option value="efectos">Efectos</option>
+          <option value="transiciones">Transiciones</option>
+          <option value="animaciones">Animaciones</option>
+          <option value="propios">Propios</option>
+        </select>
+        <input id="bib-q" placeholder="Buscar…" onchange="cargarBiblioteca()">
+      </div>
+      <label>Agregar mi recurso
+        <input id="bib-file" type="file" accept=".png,.jpg,.jpeg,.webp,.gif,.mp3,.wav,.ogg,.mp4,.webm">
+      </label>
+      <button class="sec" onclick="importarRecursoPropio()">SUBIR A BIBLIOTECA</button>
+      <p id="bib-msg" class="msg"></p>
+      <div id="bib-lista"></div>
+      <h4>Ollama (IA local)</h4>
+      <p id="ollama-estado" class="nota">…</p>
+    </section>
+
     <section data-sec="editor" class="oculto">
-      <h3>✂️ Editor profesional</h3>
-      <p class="nota">La API valida y encola un trabajo real «editar_clip»; lo exporta el trabajador con FFmpeg (recorte, reencuadre, zoom, volumen, texto y logo). El clip editado aparece en «Clips generados» al completarse el trabajo. Subtítulos: DESACTIVADOS por defecto; solo se queman si marcas la casilla y hay transcripción.</p>
-      <select id="ed-clip"></select>
+      <h3>✂️ Editor inteligente</h3>
+      <p class="nota">Elige meme/sonido/efecto, previsualízalo y colócalo en el segundo exacto. Las capas se guardan al exportar o con GUARDAR CAPAS. Subtítulos automáticos: OFF (no se queman). Exporta el motor de tu PC.</p>
+      <select id="ed-clip" onchange="alCambiarClipEditor()"></select>
+      <textarea id="ed-transcript" placeholder="Texto / conversación del clip (para IA y títulos; no se quema en el video)"></textarea>
+      <div class="botones">
+        <button onclick="cargarPlanEditor()">🧠 ANALIZAR Y ARMAR PLAN</button>
+        <button class="grad" onclick="encolarModoViral()">🚀 MODO VIRAL AUTOMÁTICO</button>
+      </div>
+      <div id="ed-timeline" class="timeline"></div>
+      <p id="ed-plan-nota" class="nota"></p>
+
+      <h4>Memes, sonidos y efectos</h4>
+      <div class="biblioteca-filtros">
+        <select id="ed-lib-tipo" onchange="cargarEditorBiblioteca()">
+          <option value="memes">Memes</option>
+          <option value="sonidos">Sonidos</option>
+          <option value="efectos">Efectos</option>
+        </select>
+        <select id="ed-lib-item" onchange="previsualizarRecursoEditor()"></select>
+        <label>Segundo <input id="ed-capa-seg" type="number" min="0" step="0.1" value="1"></label>
+        <label>Duración (s) <input id="ed-capa-dur" type="number" min="0.1" step="0.1" value="2"></label>
+      </div>
+      <div class="botones">
+        <button type="button" onclick="colocarCapaEditor()">➕ COLOCAR EN EL CLIP</button>
+        <button type="button" class="sec" onclick="guardarCapasEditor()">💾 GUARDAR CAPAS</button>
+        <label class="sec" style="display:inline-flex;align-items:center;gap:6px">Importar
+          <input id="ed-lib-file" type="file" accept=".png,.jpg,.jpeg,.webp,.gif,.mp3,.wav,.ogg,.mp4" onchange="importarRecursoDesdeEditor(this)">
+        </label>
+      </div>
+      <div id="ed-lib-preview" class="ed-lib-preview"></div>
+      <div id="ed-capas" class="ed-capas"></div>
+      <p id="ed-capas-msg" class="msg"></p>
+
       <div class="grid2">
         <div>
           <label>Recorte inicio (s) <input id="ed-ini" type="number" step="0.1" value="0"></label>
@@ -144,8 +203,9 @@
           <label>Logo (PNG/JPG) <input id="ed-logo-file" type="file" accept=".png,.jpg,.jpeg"></label>
           <button class="sec" onclick="subirLogo()">SUBIR LOGO</button>
           <p id="ed-logo-msg" class="msg"></p>
-          <label><input id="ed-subs" type="checkbox"> Quemar subtítulos (solo si hay transcripción)</label>
-          <textarea id="ed-transcript" placeholder="Transcripción opcional para subtítulos/títulos"></textarea>
+          <p class="nota">Subtítulos quemados: desactivados. La transcripción solo alimenta la IA.</p>
+          <input id="ed-subs" type="checkbox" class="oculto" tabindex="-1" aria-hidden="true">
+          <video id="ed-preview" controls playsinline class="ed-preview"></video>
         </div>
       </div>
       <div class="botones">
@@ -250,6 +310,6 @@
     <button type="button" class="rojo" onclick="confirmarBorrarClip()">ELIMINAR</button>
   </div>
 </div>
-<script src="/static/app.js?v=subtitulos2"></script>
+<script src="/static/app.js?v=editor-capas3"></script>
 </body>
 </html>

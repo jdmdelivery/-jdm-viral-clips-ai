@@ -1,6 +1,7 @@
 """Generación/exportación de clips. Vertical 9:16 1080x1920 por defecto: la imagen
 llena todo el cuadro (escala y recorte del sobrante), sin fondo borroso. También 16:9 y 1:1.
-Subtítulos DESACTIVADOS por defecto: solo se queman si el usuario pasa un .srt y lo activa."""
+Subtítulos: NUNCA se queman en el MP4 exportado (aunque se pase srt).
+La transcripción interna se conserva aparte para IA/títulos."""
 import subprocess
 from pathlib import Path
 from procesos import SIN_VENTANA
@@ -15,20 +16,15 @@ MAX_CLIP_S = 120.0
 
 def exportar_clip(fuente, inicio_s, fin_s, salida, formato="9:16", subtitulos=False, srt=None):
     if fin_s <= inicio_s: raise ValueError("fin debe ser mayor que inicio")
+    # subtitulos/srt se ignoran a propósito: no quemar SRT/ASS/VTT.
+    _ = (subtitulos, srt)
     w, h = FORMATOS[formato]
     fc = f"[0:v]scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h}[v]"
     cmd = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
            "-ss", str(inicio_s), "-to", str(fin_s), "-i", str(fuente),
            "-filter_complex", fc, "-map", "[v]", "-map", "0:a:0?",
            "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p",
-           "-c:a", "aac", "-ar", "48000", "-shortest"]
-    if subtitulos and srt and Path(srt).exists():
-        cmd = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
-               "-ss", str(inicio_s), "-to", str(fin_s), "-i", str(fuente),
-               "-filter_complex", fc + f";[v]subtitles={srt}[v2]", "-map", "[v2]", "-map", "0:a:0?",
-               "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p",
-               "-c:a", "aac", "-ar", "48000", "-shortest"]
-    cmd.append(str(salida))
+           "-c:a", "aac", "-ar", "48000", "-shortest", str(salida)]
     r = subprocess.run(cmd, capture_output=True, text=True, timeout=3600, creationflags=SIN_VENTANA)
     if r.returncode != 0 or not Path(salida).exists():
         raise RuntimeError(f"FFmpeg exportando clip falló: {r.stderr[-600:]}")

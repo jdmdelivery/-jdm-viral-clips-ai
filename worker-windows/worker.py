@@ -179,16 +179,59 @@ def procesar(job, cfg, api=None):
                             "session_id": p.get("session_id")}]}
     if tipo == "editar_clip":
         # Etapa 3 (lado trabajador): edición real con FFmpeg (ver editor.py).
+        # Subtítulos NUNCA se queman. Si hay capas (meme/sonido/efecto), se
+        # aplican con capas_recursos en el segundo exacto.
         from editor import aplicar_edicion
-        params = p.get("params", {})
+        params = dict(p.get("params") or {})
+        params["subtitulos"] = False
+        capas = params.get("capas") or p.get("capas") or []
         base = Path(p["salida_dir"]) if p.get("salida_dir") else Path(cfg.get("carpeta_clips", "clips")) / "ediciones"
+        base.mkdir(parents=True, exist_ok=True)
         salida = base / f"clip-{p.get('clip_id', 'x')}-editado.mp4"
-        r = aplicar_edicion(p["file_path"], salida, params)
+        fuente = resolver_archivo(p, cfg, api) if not Path(p.get("file_path") or "").is_file() else p["file_path"]
+        if capas:
+            # Primero recorte/zoom/formato; luego capas sobre ese resultado.
+            tmp = base / f"clip-{p.get('clip_id', 'x')}-base.mp4"
+            r = aplicar_edicion(fuente, tmp, params)
+            import capas_recursos
+            bib_cfg = dict(cfg)
+            bib_cfg.setdefault("carpeta_biblioteca",
+                               str(Path(__file__).resolve().parent / "biblioteca"))
+            # Resolver recurso_id -> ruta local
+            capas_resueltas = []
+            for capa in capas:
+                item = dict(capa)
+                if not item.get("ruta") and item.get("recurso_id"):
+                    try:
+                        for rec in capas_recursos.listar(bib_cfg)["recursos"]:
+                            if rec.get("id") == item["recurso_id"]:
+                                item["ruta"] = rec.get("ruta")
+                                break
+                    except Exception:
+                        pass
+                capas_resueltas.append(item)
+            final = capas_recursos.exportar_con_capas(
+                r["file_path"], salida, capas_resueltas,
+                cfg=bib_cfg, formato=params.get("formato") or "9:16",
+                zoom=1.0,  # el zoom ya se aplicó en aplicar_edicion
+            )
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:
+                pass
+            return {"clips": [{"file_path": final["file_path"], "format": final.get("format") or r["format"],
+                                "duration_s": final.get("duration_s") or r["duration_s"],
+                                "score": p.get("score", params.get("score", 0)),
+                                "title": p.get("title") or "Clip editado",
+                                "subtitles": False}],
+                    "capas": final.get("capas"),
+                    "nota": (r.get("nota") or "") + " " + (final.get("nota") or "")}
+        r = aplicar_edicion(fuente, salida, params)
         return {"clips": [{"file_path": r["file_path"], "format": r["format"],
                             "duration_s": r["duration_s"],
                             "score": p.get("score", params.get("score", 0)),
                             "title": p.get("title") or "Clip editado",
-                            "subtitles": r["subtitles"]}],
+                            "subtitles": False}],
                 "nota": r["nota"]}
     if tipo == "miniatura":
         # Etapa 3: miniatura suelta (la API la encola como job propio «miniatura»).

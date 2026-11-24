@@ -1,0 +1,140 @@
+{
+  "version": 1,
+  "recursos": [
+    {
+      "id": "seed-risas-punch",
+      "tipo": "sonidos",
+      "nombre": "Risas punch",
+      "archivo": "sonidos/Risas-punch.wav",
+      "sha256": "800bca8942fdd132221dc96173a24be47c57dda7cff7226886bb6e1305fa9cb2",
+      "bytes": 30948,
+      "fuente": "JDM Viral Clips AI (generado localmente)",
+      "licencia": "CC0",
+      "url": "",
+      "emociones": [
+        "risa"
+      ],
+      "situaciones": [
+        "chiste",
+        "reaccion"
+      ],
+      "categorias": [
+        "sonidos"
+      ],
+      "notas": "Ejemplo CC0 con id estable panel+worker.",
+      "creado": "2026-11-24T17:11:57Z"
+    },
+    {
+      "id": "seed-boom-suave",
+      "tipo": "sonidos",
+      "nombre": "Boom suave",
+      "archivo": "sonidos/Boom-suave.wav",
+      "sha256": "8529bb088839dee5a99740bdfc791f590eb623b0130a3f45fe695881f1cd17b9",
+      "bytes": 44178,
+      "fuente": "JDM Viral Clips AI (generado localmente)",
+      "licencia": "CC0",
+      "url": "",
+      "emociones": [
+        "sorpresa"
+      ],
+      "situaciones": [
+        "reaccion"
+      ],
+      "categorias": [
+        "sonidos"
+      ],
+      "notas": "Ejemplo CC0 con id estable panel+worker.",
+      "creado": "2026-11-24T17:11:57Z"
+    },
+    {
+      "id": "seed-ping",
+      "tipo": "sonidos",
+      "nombre": "Ping",
+      "archivo": "sonidos/Ping.wav",
+      "sha256": "2c28479f5d1332afe01cb203314bba7714b1272ea16d909afa5a3be418870032",
+      "bytes": 22128,
+      "fuente": "JDM Viral Clips AI (generado localmente)",
+      "licencia": "CC0",
+      "url": "",
+      "emociones": [
+        "sorpresa"
+      ],
+      "situaciones": [
+        "reaccion"
+      ],
+      "categorias": [
+        "sonidos"
+      ],
+      "notas": "Ejemplo CC0 con id estable panel+worker.",
+      "creado": "2026-11-24T17:11:57Z"
+    },
+    {
+      "id": "seed-flash-blanco",
+      "tipo": "efectos",
+      "nombre": "Flash blanco",
+      "archivo": "efectos/Flash-blanco.png",
+      "sha256": "3c7bdad424318e3e9578ca5bab49c31a0bee62da2936cf1a2409ce4961102c2a",
+      "bytes": 1900,
+      "fuente": "JDM Viral Clips AI (generado localmente)",
+      "licencia": "CC0",
+      "url": "",
+      "emociones": [
+        "sorpresa"
+      ],
+      "situaciones": [
+        "reaccion"
+      ],
+      "categorias": [
+        "efectos"
+      ],
+      "notas": "Ejemplo CC0 con id estable panel+worker.",
+      "creado": "2026-11-24T17:11:57Z"
+    },
+    {
+      "id": "seed-alerta-roja",
+      "tipo": "memes",
+      "nombre": "Alerta roja",
+      "archivo": "memes/Alerta-roja.png",
+      "sha256": "47bdad3abc060f442b091d0d66a3dd20b2c54996fa0954e13a385a96deb82594",
+      "bytes": 1902,
+      "fuente": "JDM Viral Clips AI (generado localmente)",
+      "licencia": "CC0",
+      "url": "",
+      "emociones": [
+        "enojo",
+        "tension"
+      ],
+      "situaciones": [
+        "discusion"
+      ],
+      "categorias": [
+        "memes"
+      ],
+      "notas": "Ejemplo CC0 con id estable panel+worker.",
+      "creado": "2026-11-24T17:11:57Z"
+    },
+    {
+      "id": "seed-impacto-azul",
+      "tipo": "memes",
+      "nombre": "Impacto azul",
+      "archivo": "memes/Impacto-azul.png",
+      "sha256": "659d3dd7d0d0b271840f78eb7db559ee8b62c3a8875aeda465f8034fc7943f9e",
+      "bytes": 1903,
+      "fuente": "JDM Viral Clips AI (generado localmente)",
+      "licencia": "CC0",
+      "url": "",
+      "emociones": [
+        "sorpresa"
+      ],
+      "situaciones": [
+        "reaccion",
+        "chiste"
+      ],
+      "categorias": [
+        "memes"
+      ],
+      "notas": "Ejemplo CC0 con id estable panel+worker.",
+      "creado": "2026-11-24T17:11:57Z"
+    }
+  ]
+}

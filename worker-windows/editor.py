@@ -10,11 +10,9 @@ aplicar_edicion(fuente, salida, params) soporta:
     texto_posicion "arriba"/"centro"/"abajo" y tamaño texto_tamano)
   - logo: logo_path existente -> overlay escalado en una esquina
     (logo_esquina, logo_margen, logo_ancho)
-  - subtítulos: SOLO si subtitulos es True. Se queman desde `transcript`
-    (se construye un .srt partiendo el texto en frases sobre la duración) o
-    desde transcribe.py si está disponible. Sin flag, JAMÁS se queman. Si no
-    hay forma real de obtenerlos, se exporta sin subtítulos y el resultado
-    lo dice (subtitles: False + nota).
+  - subtítulos: NUNCA se queman SRT/ASS/VTT en la exportación (política
+    actual). La transcripción interna sigue disponible vía transcribe.py
+    para IA/títulos; el flag `subtitulos` se ignora a propósito.
   - miniatura: clipper.miniatura en miniatura_segundo (defecto 1 s)
 Devuelve {file_path, duration_s (ffprobe), format, subtitles, thumb_path, nota}.
 """
@@ -23,6 +21,9 @@ from pathlib import Path
 from procesos import SIN_VENTANA
 
 from clipper import FORMATOS, miniatura
+
+# Quemado de subtítulos desactivado en clips exportados.
+QUEMAR_SUBTITULOS = False
 
 FUENTES_CANDIDATAS = [
     "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
@@ -150,34 +151,13 @@ def aplicar_edicion(fuente, salida, params=None):
         cadena.append(f"{entrada_v}null[vref]")
         entrada_v = "[vref]"
 
-    # --- Subtítulos (solo con flag explícito) ---
+    # --- Subtítulos: nunca quemar SRT/ASS/VTT en el MP4 exportado ---
     subtitulos_ok = False
-    if params.get("subtitulos") is True:
-        srt = None
-        texto_tr = params.get("transcript") or params.get("transcripcion")
-        if isinstance(texto_tr, dict):
-            texto_tr = texto_tr.get("texto")
-        if texto_tr:
-            srt = construir_srt_desde_texto(texto_tr, dur_clip, tmp / "subs.srt")
-        else:
-            try:
-                from transcribe import transcribir, generar_srt
-                tr = transcribir(fuente)
-                if tr.get("disponible") and tr.get("segmentos"):
-                    segs = [{"start_s": max(0.0, s["start_s"] - ini),
-                             "end_s": min(dur_clip, s["end_s"] - ini), "texto": s["texto"]}
-                            for s in tr["segmentos"] if s["end_s"] > ini and s["start_s"] < fin]
-                    srt = generar_srt(segs, tmp / "subs.srt")
-            except Exception as e:
-                notas.append(f"Transcripción para subtítulos no disponible: {e}")
-        if srt:
-            cadena.append(f"{entrada_v}subtitles='{_esc_ruta_filtro(srt)}'[vsub]")
-            entrada_v = "[vsub]"
-            subtitulos_ok = True
-        else:
-            notas.append("subtitulos=True pero no hubo texto ni transcripción real disponible; "
-                         "se exporta SIN subtítulos.")
-    # Por defecto (sin flag) nunca se queman subtítulos.
+    if params.get("subtitulos") is True or params.get("srt") or params.get("ass"):
+        notas.append(
+            "Pedido de subtítulos quemados ignorado: la exportación no incrusta "
+            "SRT/ASS/VTT. La transcripción interna sigue disponible para la IA."
+        )
 
     # --- Texto (drawtext) ---
     if params.get("texto") and params.get("texto_activo", True):

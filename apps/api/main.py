@@ -378,6 +378,9 @@ def current_user(request: Request, authorization: str = Header(default=""), s=De
     tok = authorization.replace("Bearer ", "").strip()
     if not tok:
         tok = (request.cookies.get("jdm_token") or "").strip()
+    if not tok:
+        # Permite <img>/<audio src> con ?token=… (vista previa de biblioteca/clips).
+        tok = (request.query_params.get("token") or "").strip()
     row = s.query(SessionToken).filter_by(token=tok).first() if tok else None
     if not row: raise HTTPException(401, "No autenticado")
     user = s.get(User, row.user_id)
@@ -683,6 +686,13 @@ class PubIn(BaseModel):
 class TitlesIn(BaseModel): type: str = "general"; mode: str = "general"; score: int = 0; transcript: str | None = None
 class WorkerIn(BaseModel): name: str; info: dict = {}
 class ConfigIn(BaseModel): values: dict
+class CapaIn(BaseModel):
+    tipo: str  # meme | sonido | efecto
+    recurso_id: str | None = None
+    ruta: str | None = None
+    nombre: str | None = None
+    en_s: float = 0
+    duracion_s: float | None = 2.0
 class EditIn(BaseModel):
     trim_start_s: float = 0; trim_end_s: float | None = None
     formato: str = "9:16"; offset_x: float = 0; offset_y: float = 0
@@ -690,6 +700,7 @@ class EditIn(BaseModel):
     texto: str | None = None; texto_activo: bool = False
     logo_path: str | None = None; subtitulos: bool = False
     transcript: str | None = None
+    capas: list[CapaIn] = []
 class ThumbIn(BaseModel): segundo: float = 1.0
 class AutopilotIn(BaseModel):
     activo: bool | None = None; min_score: int | None = None
@@ -1813,13 +1824,19 @@ def edit_clip(cid: int, data: EditIn, user=Depends(current_user), s=Depends(db))
     if data.zoom < 1: raise HTTPException(400, "zoom debe ser >= 1")
     if data.volumen <= 0: raise HTTPException(400, "volumen debe ser un factor > 0")
     params = data.model_dump()
+    # Nunca quemar subtítulos en la exportación (la transcripción queda para IA).
+    params["subtitulos"] = False
+    capas = [x.model_dump() for x in (data.capas or [])]
+    params["capas"] = capas
+    # Persistir capas del editor para al reabrir el clip.
+    _cfg_set(s, f"clip_capas_{cid}", capas)
     job = Job(type="editar_clip", payload=json.dumps({
-        "clip_id": cid, "file_path": c.file_path, "params": params, "title": c.title}))
+        "clip_id": cid, "file_path": c.file_path, "params": params, "title": c.title,
+        "capas": capas}))
     s.add(job); s.commit()
-    audit(s, user.email, "editar_clip", f"clip {cid} -> job {job.id} formato {data.formato}")
-    return {"job_id": job.id, "status": job.status,
-            "nota": "Edición encolada: la exporta el trabajador (Windows/Linux) al reclamar el trabajo; "
-                    "el clip editado aparecerá en /clips cuando el trabajador lo complete. La API no edita video."}
+    audit(s, user.email, "editar_clip", f"clip {cid} -> job {job.id} formato {data.formato} capas {len(capas)}")
+    return {"job_id": job.id, "status": job.status, "capas": capas,
+            "nota": "Edición encolada (sin subtítulos quemados). El trabajador aplica recorte/zoom y capas de meme/sonido/efecto."}
 @app.post("/clips/{cid}/logo")
 def upload_logo(cid: int, file: UploadFile = File(...), user=Depends(current_user), s=Depends(db)):
     c = s.get(Clip, cid)
@@ -1915,6 +1932,179 @@ def analyze(pid: int, user=Depends(current_user), s=Depends(db)):
 @app.post("/titles")
 def titles(data: TitlesIn, user=Depends(current_user)):
     return generar_titulos(data.type, data.mode, data.score, data.transcript)
+
+# ---------- Biblioteca de recursos + editor inteligente (local) ----------
+try:
+    import biblioteca_api as bib_api  # noqa: E402
+except Exception:  # pragma: no cover
+    bib_api = None
+
+@app.get("/biblioteca")
+def biblioteca_listar(tipo: str | None = None, emocion: str | None = None,
+                      situacion: str | None = None, q: str | None = None,
+                      user=Depends(current_user)):
+    if bib_api is None:
+        raise HTTPException(503, "La biblioteca local no está disponible en este servidor.")
+    cfg = bib_api.asegurar_biblioteca()
+    return bib_api.biblioteca_recursos.listar(cfg, tipo=tipo,
+                                             emocion=emocion, situacion=situacion, q=q)
+
+@app.get("/biblioteca/catalogo-curado")
+def biblioteca_catalogo_curado(user=Depends(current_user)):
+    if bib_api is None:
+        raise HTTPException(503, "La biblioteca local no está disponible en este servidor.")
+    return {"items": bib_api.descargar_recursos.manifesto_publico()}
+
+@app.post("/biblioteca/sincronizar")
+def biblioteca_sincronizar(user=Depends(current_user), s=Depends(db)):
+    """Encola la descarga legal de recursos en el trabajador. También puede
+    ejecutarse en esta PC si la biblioteca está en el mismo disco."""
+    j = Job(type="sincronizar_biblioteca", payload="{}")
+    s.add(j); s.commit()
+    local = None
+    if bib_api is not None:
+        try:
+            local = bib_api.descargar_recursos.sincronizar(bib_api.cfg_desde_entorno())
+        except Exception as e:
+            local = {"error": str(e)[:300]}
+    return {"ok": True, "job_id": j.id, "local": local,
+            "nota": "Catálogo curado con licencias verificadas. No se repiten archivos ya guardados."}
+
+@app.post("/biblioteca/importar")
+async def biblioteca_importar(file: UploadFile = File(...),
+                              nombre: str = "", emociones: str = "",
+                              situaciones: str = "",
+                              user=Depends(current_user)):
+    if bib_api is None:
+        raise HTTPException(503, "La biblioteca local no está disponible en este servidor.")
+    cfg = bib_api.cfg_desde_entorno()
+    raiz = bib_api.biblioteca_recursos.asegurar_estructura(cfg)
+    tmp = raiz / "_tmp" / (file.filename or "recurso.bin")
+    tmp.parent.mkdir(parents=True, exist_ok=True)
+    tmp.write_bytes(await file.read())
+    try:
+        r = bib_api.biblioteca_recursos.importar_propio(
+            cfg, tmp, nombre=nombre or Path(file.filename or "recurso").stem,
+            emociones=[x.strip() for x in emociones.split(",") if x.strip()],
+            situaciones=[x.strip() for x in situaciones.split(",") if x.strip()],
+        )
+    finally:
+        try: tmp.unlink()
+        except OSError: pass
+    return r
+
+@app.get("/biblioteca/{rid}/archivo")
+def biblioteca_archivo(rid: str, auth=Depends(user_or_worker)):
+    """Sirve un recurso para previsualizarlo en el editor o para que el worker lo cachee."""
+    if bib_api is None:
+        raise HTTPException(503, "La biblioteca local no está disponible en este servidor.")
+    cfg = bib_api.asegurar_biblioteca()
+    items = bib_api.biblioteca_recursos.listar(cfg)["recursos"]
+    rec = next((r for r in items if r.get("id") == rid), None)
+    if not rec or not Path(rec.get("ruta") or "").is_file():
+        raise HTTPException(404, "Recurso no encontrado")
+    return FileResponse(rec["ruta"], filename=Path(rec["ruta"]).name)
+
+@app.get("/clips/{cid}/capas")
+def clip_capas_get(cid: int, user=Depends(current_user), s=Depends(db)):
+    c = s.get(Clip, cid)
+    if not c: raise HTTPException(404, "Clip no encontrado")
+    if not _clip_autorizado(s, c, user): raise HTTPException(403, "No autorizado")
+    return {"clip_id": cid, "capas": _cfg_get(s, f"clip_capas_{cid}", []) or []}
+
+@app.put("/clips/{cid}/capas")
+def clip_capas_put(cid: int, body: dict = Body(default={}), user=Depends(current_user), s=Depends(db)):
+    c = s.get(Clip, cid)
+    if not c: raise HTTPException(404, "Clip no encontrado")
+    if not _clip_autorizado(s, c, user): raise HTTPException(403, "No autorizado")
+    capas = body.get("capas") if isinstance(body, dict) else None
+    if not isinstance(capas, list):
+        raise HTTPException(400, "capas debe ser una lista")
+    limpias = []
+    for raw in capas:
+        if not isinstance(raw, dict):
+            continue
+        tipo = str(raw.get("tipo") or "").lower()
+        if tipo in ("meme", "memes"):
+            tipo = "meme"
+        elif tipo in ("sonido", "sonidos", "sound"):
+            tipo = "sonido"
+        elif tipo in ("efecto", "efectos", "effect"):
+            tipo = "efecto"
+        else:
+            continue
+        limpias.append({
+            "tipo": tipo,
+            "recurso_id": raw.get("recurso_id"),
+            "ruta": raw.get("ruta"),
+            "nombre": raw.get("nombre"),
+            "en_s": float(raw.get("en_s") or 0),
+            "duracion_s": float(raw["duracion_s"]) if raw.get("duracion_s") is not None else 2.0,
+        })
+    _cfg_set(s, f"clip_capas_{cid}", limpias)
+    s.commit()
+    return {"ok": True, "clip_id": cid, "capas": limpias,
+            "nota": "Capas guardadas. Se aplicarán al exportar. Sin subtítulos quemados."}
+
+@app.get("/ia/local")
+def ia_local_estado(user=Depends(current_user)):
+    if bib_api is None:
+        return {"disponible": False, "modelos": [], "nota": "Módulo local no cargado."}
+    return bib_api.ollama_local.estado_ollama()
+
+@app.post("/ia/analizar-texto")
+def ia_analizar_texto(body: dict = Body(default={}), user=Depends(current_user), s=Depends(db)):
+    texto = (body or {}).get("texto") or ""
+    if bib_api is None:
+        raise HTTPException(503, "Análisis local no disponible.")
+    analisis = bib_api.ollama_local.analizar_conversacion(texto, modelo=(body or {}).get("modelo"))
+    j = Job(type="analizar_conversacion",
+            payload=json.dumps({"texto": texto, "modelo": (body or {}).get("modelo")}))
+    s.add(j); s.commit()
+    return {"analisis": analisis, "job_id": j.id}
+
+@app.post("/clips/{cid}/viral")
+def clip_modo_viral(cid: int, body: dict = Body(default={}), user=Depends(current_user), s=Depends(db)):
+    c = s.get(Clip, cid)
+    if not c: raise HTTPException(404, "Clip no encontrado")
+    if not _clip_autorizado(s, c, user): raise HTTPException(403, "No puedes editar un clip de otra cuenta.")
+    payload = {
+        "clip_id": cid, "file_path": c.file_path, "aplicar": True,
+        "texto": (body or {}).get("texto") or c.subtitulo_texto or "",
+        "type": (body or {}).get("type") or "general",
+        "mode": (body or {}).get("mode") or "general",
+        "score": int(c.score or (body or {}).get("score") or 80),
+        "session_id": c.session_id, "project_id": c.project_id, "event_id": c.event_id,
+    }
+    j = Job(type="modo_viral", payload=json.dumps(payload))
+    s.add(j); s.commit()
+    plan = None
+    if bib_api is not None and c.file_path and Path(c.file_path).is_file():
+        try:
+            plan = bib_api.editor_inteligente.analizar_y_planear(
+                bib_api.cfg_desde_entorno(), texto=payload["texto"],
+                tipo_momento=payload["type"], modo=payload["mode"], puntuacion=payload["score"])
+        except Exception as e:
+            plan = {"error": str(e)[:300]}
+    return {"ok": True, "job_id": j.id, "plan": plan,
+            "nota": "Modo viral encolado. Subtítulos OFF por defecto. El trabajador aplica memes/sonidos/zoom."}
+
+@app.post("/clips/{cid}/plan-editor")
+def clip_plan_editor(cid: int, body: dict = Body(default={}), user=Depends(current_user), s=Depends(db)):
+    c = s.get(Clip, cid)
+    if not c: raise HTTPException(404, "Clip no encontrado")
+    if not _clip_autorizado(s, c, user): raise HTTPException(403, "No puedes editar un clip de otra cuenta.")
+    if bib_api is None:
+        raise HTTPException(503, "Editor inteligente no disponible en este servidor.")
+    plan = bib_api.editor_inteligente.analizar_y_planear(
+        bib_api.cfg_desde_entorno(),
+        texto=(body or {}).get("texto") or c.subtitulo_texto or "",
+        tipo_momento=(body or {}).get("type") or "general",
+        modo=(body or {}).get("mode") or "general",
+        puntuacion=int(c.score or 70),
+    )
+    return {"plan": plan, "timeline": plan.get("timeline"), "textos": plan.get("textos"),
+            "nota": "Vista previa del plan. Nada se exportó todavía. Subtítulos OFF."}
 
 # Redes sociales y publicaciones (SOLO borradores con aprobación en Etapa 1)
 @app.get("/social")

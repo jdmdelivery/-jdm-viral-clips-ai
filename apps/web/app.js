@@ -1,5 +1,5 @@
 // JDM VIRAL CLIPS AI — panel. Todo sale de la API; estados vacíos honestos.
-const SECCIONES = [["inicio","🏠 Inicio"],["centro","🔴 Centro LIVE"],["radar","📡 LIVE VIRAL RADAR"],["proyecto","🆕 Nuevo proyecto"],["importar","📥 Importar videos"],["analizar","🤖 Analizar con IA"],["clips","🎬 Clips generados"],["editor","✂️ Editor"],["redes","🌐 Mis redes sociales"],["publicar","📤 Publicar clips"],["calendario","📅 Calendario"],["historial","🕘 Historial"],["stats","📊 Estadísticas"],["config","⚙️ Configuración"],["admin","🛠 Administración"]];
+const SECCIONES = [["inicio","🏠 Inicio"],["centro","🔴 Centro LIVE"],["radar","📡 LIVE VIRAL RADAR"],["proyecto","🆕 Nuevo proyecto"],["importar","📥 Importar videos"],["analizar","🤖 Analizar con IA"],["clips","🎬 Clips generados"],["biblioteca","📚 Biblioteca"],["editor","✂️ Editor"],["redes","🌐 Mis redes sociales"],["publicar","📤 Publicar clips"],["calendario","📅 Calendario"],["historial","🕘 Historial"],["stats","📊 Estadísticas"],["config","⚙️ Configuración"],["admin","🛠 Administración"]];
 let token = localStorage.getItem("jdm_token") || "";
 let sesionElegida = localStorage.getItem("jdm_sesion") || "";
 let motorConectado = null, ultimoEstadoMotor = null; // null = aún sin comprobar
@@ -59,7 +59,8 @@ function ir(sec) {
   if (sec === "radar" && !ivEventos) ivEventos = setInterval(cargarEventos, 15000);
   if (sec === "clips" && !ivClips) ivClips = setInterval(cargarClips, 20000);
   ({inicio: cargarStats, stats: cargarStats, radar: cargarEventos, analizar: cargarAnalizar, clips: cargarClips,
-    editor: cargarEditor, redes: cargarRedes, publicar: () => {cargarClipSelects(); cargarPubs();},
+    biblioteca: cargarBiblioteca, editor: cargarEditor, redes: cargarRedes,
+    publicar: () => {cargarClipSelects(); cargarPubs();},
     calendario: cargarCalendario, historial: cargarHistorial, config: cargarConfig, admin: cargarWorkers,
     centro: cargarSesiones, importar: cargarProyectos}[sec] || (() => {}))();
 }
@@ -821,9 +822,215 @@ function descargar(id) {
 function descargarClip() { descargar($("ed-clip").value); }
 // Editor profesional (Etapa 3): la API valida y encola; exporta el trabajador.
 let logoPath = "";
+async function cargarBiblioteca() {
+  try {
+    const tipo = ($("bib-tipo") && $("bib-tipo").value) || "";
+    const q = ($("bib-q") && $("bib-q").value) || "";
+    const d = await api("GET", "/biblioteca?limit=200" + (tipo ? `&tipo=${encodeURIComponent(tipo)}` : "") + (q ? `&q=${encodeURIComponent(q)}` : ""));
+    const rows = d.recursos || [];
+    $("bib-lista").innerHTML = tabla(rows, [
+      ["Nombre", r => esc(r.nombre)],
+      ["Tipo", r => esc(r.tipo)],
+      ["Licencia", r => esc(r.licencia)],
+      ["Fuente", r => esc(r.fuente)],
+      ["Emociones", r => esc((r.emociones || []).join(", "))],
+      ["Situaciones", r => esc((r.situaciones || []).join(", "))],
+    ]);
+    if ($("bib-msg")) $("bib-msg").textContent = rows.length ? (rows.length + " recursos en " + (d.raiz || "biblioteca")) : "Sin recursos todavía. Pulsa SINCRONIZAR.";
+    const ol = await api("GET", "/ia/local");
+    if ($("ollama-estado")) $("ollama-estado").textContent = ol.nota + (ol.modelos && ol.modelos.length ? (" Modelos: " + ol.modelos.join(", ")) : "");
+  } catch (e) { if ($("bib-msg")) $("bib-msg").textContent = e.message; }
+}
+async function sincronizarBiblioteca() {
+  try {
+    const d = await api("POST", "/biblioteca/sincronizar", {});
+    const local = d.local || {};
+    const n = (local.descargados || []).length;
+    const o = (local.omitidos || []).length;
+    const err = (local.errores || []).length;
+    $("bib-msg").textContent = `Trabajo #${d.job_id}. Descargados: ${n}. Ya estaban: ${o}. Errores: ${err}.`;
+    await cargarBiblioteca();
+  } catch (e) { $("bib-msg").textContent = e.message; }
+}
+async function importarRecursoPropio() {
+  const f = $("bib-file") && $("bib-file").files[0];
+  if (!f) { $("bib-msg").textContent = "Elige un archivo de meme o sonido."; return; }
+  const fd = new FormData();
+  fd.append("file", f);
+  fd.append("nombre", f.name);
+  try {
+    const r = await fetch("/biblioteca/importar", {method: "POST", headers: {"Authorization": "Bearer " + token}, body: fd});
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(d.detail || "No se pudo importar");
+    $("bib-msg").textContent = d.duplicado ? "Ese archivo ya estaba (duplicado detectado)." : ("Agregado: " + ((d.recurso || {}).nombre || f.name));
+    await cargarBiblioteca();
+  } catch (e) { $("bib-msg").textContent = e.message; }
+}
+let edCapas = [];
+let edLibItems = [];
+
 async function cargarEditor() {
   await cargarClipSelects();
   $("ed-clips").innerHTML = tabla(clipsCache, [["Clip", r => "#" + r.id + " " + esc(r.title || "")], ["Formato", r => esc(r.format)], ["Duración", r => r.duration_s + "s"], ["Archivo", r => r.descargable ? "En el servidor" : esc(r.file_path || "—") + " (en tu PC)"], ["Acciones", r => r.descargable ? `<button onclick="descargar(${r.id})">DESCARGAR</button>` : "—"]]);
+  const prev = $("ed-preview");
+  const c = clipsCache.find(x => x.id == $("ed-clip").value);
+  if (prev && c && c.tiene_copia_servidor) prev.src = "/clips/" + c.id + "/media?token=" + encodeURIComponent(token);
+  else if (prev && c && c.id) prev.removeAttribute("src");
+  await cargarEditorBiblioteca();
+  await cargarCapasEditor();
+}
+async function alCambiarClipEditor() {
+  await cargarCapasEditor();
+  const prev = $("ed-preview");
+  const c = clipsCache.find(x => x.id == $("ed-clip").value);
+  if (prev && c && c.tiene_copia_servidor) prev.src = "/clips/" + c.id + "/media";
+}
+async function cargarEditorBiblioteca() {
+  const tipo = ($("ed-lib-tipo") && $("ed-lib-tipo").value) || "memes";
+  try {
+    const d = await api("GET", "/biblioteca?tipo=" + encodeURIComponent(tipo));
+    edLibItems = d.recursos || [];
+    if ($("ed-lib-item")) {
+      $("ed-lib-item").innerHTML = edLibItems.length
+        ? edLibItems.map(r => `<option value="${esc(r.id)}">${esc(r.nombre)} (${esc(r.licencia)})</option>`).join("")
+        : `<option value="">Sin recursos — ve a Biblioteca</option>`;
+    }
+    previsualizarRecursoEditor();
+  } catch (e) {
+    if ($("ed-capas-msg")) $("ed-capas-msg").textContent = e.message;
+  }
+}
+function previsualizarRecursoEditor() {
+  const box = $("ed-lib-preview");
+  if (!box) return;
+  const id = $("ed-lib-item") && $("ed-lib-item").value;
+  const item = edLibItems.find(r => r.id === id);
+  if (!item) { box.innerHTML = "<p class='nota'>Elige un recurso.</p>"; return; }
+  const tipo = ($("ed-lib-tipo") && $("ed-lib-tipo").value) || item.tipo;
+  const url = "/biblioteca/" + encodeURIComponent(item.id) + "/archivo";
+  if (tipo === "sonidos") box.innerHTML = `<audio controls src="${url}"></audio>`;
+  else if ((item.archivo || "").endsWith(".mp4") || (item.archivo || "").endsWith(".webm"))
+    box.innerHTML = `<video controls playsinline src="${url}"></video>`;
+  else box.innerHTML = `<img alt="${esc(item.nombre)}" src="${url}">`;
+}
+// Nota: la cookie jdm_token (misma origen) autoriza el <img>/<audio> sin Bearer.
+function renderCapasEditor() {
+  const box = $("ed-capas");
+  if (!box) return;
+  if (!edCapas.length) { box.innerHTML = "<p class='nota'>Sin capas todavía.</p>"; return; }
+  box.innerHTML = edCapas.map((c, i) => `
+    <div class="ed-capa">
+      <b>${esc(c.tipo)}</b>
+      <span>${esc(c.nombre || c.recurso_id || "recurso")}</span>
+      <label>s <input type="number" min="0" step="0.1" value="${Number(c.en_s || 0)}"
+        onchange="moverCapaEditor(${i}, this.value)"></label>
+      ${c.tipo === "sonido" ? "" : `<label>dur <input type="number" min="0.1" step="0.1" value="${Number(c.duracion_s == null ? 2 : c.duracion_s)}"
+        onchange="durarCapaEditor(${i}, this.value)"></label>`}
+      <button type="button" class="sec" onclick="quitarCapaEditor(${i})">Quitar</button>
+    </div>`).join("");
+}
+async function cargarCapasEditor() {
+  const cid = $("ed-clip") && $("ed-clip").value;
+  if (!cid) { edCapas = []; renderCapasEditor(); return; }
+  try {
+    const d = await api("GET", `/clips/${cid}/capas`);
+    edCapas = Array.isArray(d.capas) ? d.capas : [];
+    renderCapasEditor();
+  } catch (e) {
+    edCapas = [];
+    renderCapasEditor();
+    if ($("ed-capas-msg")) $("ed-capas-msg").textContent = e.message;
+  }
+}
+function colocarCapaEditor() {
+  const id = $("ed-lib-item") && $("ed-lib-item").value;
+  const item = edLibItems.find(r => r.id === id);
+  if (!item) { if ($("ed-capas-msg")) $("ed-capas-msg").textContent = "Elige un recurso de la lista."; return; }
+  const tipoSel = ($("ed-lib-tipo") && $("ed-lib-tipo").value) || item.tipo;
+  const tipo = tipoSel === "memes" ? "meme" : tipoSel === "sonidos" ? "sonido" : tipoSel === "efectos" ? "efecto" : item.tipo;
+  const en = Math.max(0, Number($("ed-capa-seg") && $("ed-capa-seg").value || 0));
+  const dur = Math.max(0.1, Number($("ed-capa-dur") && $("ed-capa-dur").value || 2));
+  edCapas.push({
+    tipo, recurso_id: item.id, nombre: item.nombre, en_s: en,
+    duracion_s: tipo === "sonido" ? null : dur,
+  });
+  renderCapasEditor();
+  if ($("ed-capas-msg")) $("ed-capas-msg").textContent = `Colocado ${item.nombre} en ${en}s. Pulsa GUARDAR CAPAS o ENCOLAR EXPORTACIÓN.`;
+}
+function moverCapaEditor(i, val) {
+  if (!edCapas[i]) return;
+  edCapas[i].en_s = Math.max(0, Number(val) || 0);
+}
+function durarCapaEditor(i, val) {
+  if (!edCapas[i]) return;
+  edCapas[i].duracion_s = Math.max(0.1, Number(val) || 0.1);
+}
+function quitarCapaEditor(i) {
+  edCapas = edCapas.filter((_, idx) => idx !== i);
+  renderCapasEditor();
+}
+async function guardarCapasEditor() {
+  const cid = $("ed-clip") && $("ed-clip").value;
+  if (!cid) { if ($("ed-capas-msg")) $("ed-capas-msg").textContent = "Elige un clip."; return; }
+  try {
+    const d = await api("PUT", `/clips/${cid}/capas`, {capas: edCapas});
+    edCapas = d.capas || edCapas;
+    renderCapasEditor();
+    if ($("ed-capas-msg")) $("ed-capas-msg").textContent = d.nota || "Capas guardadas.";
+  } catch (e) { if ($("ed-capas-msg")) $("ed-capas-msg").textContent = e.message; }
+}
+async function importarRecursoDesdeEditor(input) {
+  const f = input && input.files && input.files[0];
+  if (!f) return;
+  const tipo = ($("ed-lib-tipo") && $("ed-lib-tipo").value) || "memes";
+  const fd = new FormData();
+  fd.append("file", f);
+  fd.append("nombre", f.name);
+  try {
+    const r = await fetch("/biblioteca/importar", {method: "POST", headers: {"Authorization": "Bearer " + token}, body: fd});
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(d.detail || "No se pudo importar");
+    if ($("ed-capas-msg")) $("ed-capas-msg").textContent = d.duplicado ? "Ya estaba en la biblioteca." : ("Importado: " + ((d.recurso || {}).nombre || f.name));
+    await cargarEditorBiblioteca();
+  } catch (e) { if ($("ed-capas-msg")) $("ed-capas-msg").textContent = e.message; }
+  finally { if (input) input.value = ""; }
+}
+async function cargarPlanEditor() {
+  const cid = $("ed-clip").value;
+  if (!cid) { if ($("ed-msg")) $("ed-msg").textContent = "Elige un clip."; return; }
+  try {
+    const d = await api("POST", `/clips/${cid}/plan-editor`, {texto: ($("ed-transcript") && $("ed-transcript").value) || ""});
+    const tl = d.timeline || [];
+    if ($("ed-timeline")) {
+      $("ed-timeline").innerHTML = tl.length
+        ? tl.map(p => `<div class="tl-item"><b>${esc(p.pista)}</b> @ ${esc(p.inicio_s)}s — ${esc(p.accion)}: ${esc(p.detalle || "")}</div>`).join("")
+        : "<p class='nota'>Sin pistas todavía.</p>";
+    }
+    const plan = d.plan || {};
+    if (plan.zoom != null && $("ed-zoom")) $("ed-zoom").value = plan.zoom;
+    if (plan.offset_x != null && $("ed-ox")) $("ed-ox").value = plan.offset_x;
+    if (plan.offset_y != null && $("ed-oy")) $("ed-oy").value = plan.offset_y;
+    const texts = plan.textos || d.textos || {};
+    if ($("ed-plan-nota")) {
+      const an = plan.analisis || {};
+      $("ed-plan-nota").textContent = (d.nota || "") + " Emociones: " + (an.emociones || []).join(", ")
+        + ". Situaciones: " + (an.situaciones || []).join(", ")
+        + ". Título sugerido: " + ((texts.titulos || [])[0] || "—");
+    }
+    if ($("ed-msg")) $("ed-msg").textContent = "Plan listo. Subtítulos siguen OFF.";
+  } catch (e) { if ($("ed-msg")) $("ed-msg").textContent = e.message; }
+}
+async function encolarModoViral() {
+  const cid = $("ed-clip").value;
+  if (!cid) { $("ed-msg").textContent = "Elige un clip."; return; }
+  try {
+    const d = await api("POST", `/clips/${cid}/viral`, {texto: ($("ed-transcript") && $("ed-transcript").value) || ""});
+    $("ed-msg").textContent = "Modo viral encolado (trabajo #" + d.job_id + "). " + (d.nota || "");
+    if (d.plan && $("ed-timeline")) {
+      const tl = d.plan.timeline || [];
+      $("ed-timeline").innerHTML = tl.map(p => `<div class="tl-item"><b>${esc(p.pista)}</b> @ ${esc(p.inicio_s)}s — ${esc(p.detalle || p.accion)}</div>`).join("");
+    }
+  } catch (e) { $("ed-msg").textContent = e.message; }
 }
 async function subirLogo() {
   const f = $("ed-logo-file").files[0], cid = $("ed-clip").value;
@@ -836,15 +1043,17 @@ async function subirLogo() {
 }
 async function encolarEdicion() {
   const cid = $("ed-clip").value; if (!cid) { $("ed-msg").textContent = "No hay clip seleccionado."; return; }
+  try { await api("PUT", `/clips/${cid}/capas`, {capas: edCapas}); } catch (e) { /* se reenvían en el edit */ }
   const body = {trim_start_s: Number($("ed-ini").value || 0), formato: $("ed-formato").value,
     offset_x: Number($("ed-ox").value || 0), offset_y: Number($("ed-oy").value || 0),
     zoom: Number($("ed-zoom").value || 1), volumen: Number($("ed-vol").value || 1),
     texto: $("ed-texto").value || null, texto_activo: $("ed-texto-activo").checked,
-    logo_path: logoPath || null, subtitulos: $("ed-subs").checked,
-    transcript: $("ed-transcript").value || null};
+    logo_path: logoPath || null, subtitulos: false,
+    transcript: $("ed-transcript").value || null,
+    capas: edCapas};
   const fin = $("ed-fin").value; if (fin !== "") body.trim_end_s = Number(fin);
   try { const d = await api("POST", `/clips/${cid}/edit`, body);
-    $("ed-msg").textContent = "Trabajo #" + d.job_id + " encolado. " + (d.nota || "Lo exporta el trabajador; revisa Trabajos y Clips generados.");
+    $("ed-msg").textContent = "Trabajo #" + d.job_id + " encolado. Capas: " + (edCapas.length) + ". " + (d.nota || "Lo exporta el motor de tu PC.");
   } catch (e) { $("ed-msg").textContent = e.message; }
 }
 async function pedirMiniatura() {
