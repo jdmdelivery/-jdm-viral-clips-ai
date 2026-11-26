@@ -11,7 +11,7 @@ Errores honestos y específicos: si el en vivo todavía no comienza, es
 privado/no disponible o la plataforma no entrega la señal, se lanza
 ErrorResolucion con el motivo en español y el trabajo falla con ese
 mensaje. NUNCA se finge una grabación que no existe."""
-import subprocess, sys
+import os, subprocess, sys
 from procesos import SIN_VENTANA
 from pathlib import Path
 from urllib.parse import urlparse
@@ -71,8 +71,13 @@ def _ejecutar_ytdlp(url, extra=()):
 # una CADENA de reintentos reales, en orden:
 #   1. la vía habitual (la de siempre);
 #   2. clientes alternativos de YouTube (extractor-args player_client):
-#      android, ios y web_safari no pasan por el mismo muro;
-#   3. la sesión del PROPIO navegador de esta PC (--cookies-from-browser
+#      tv, android, ios, web_safari y web_embedded no pasan por el
+#      mismo muro (el «tv» suele entregar la señal sin sesión);
+#   3. el archivo cookies.txt de la sesión del dueño, si existe (ver
+#      _ruta_cookies_txt): la vía más fiable cuando el muro aprieta,
+#      porque trae la sesión de YouTube ya iniciada por el propio
+#      usuario en su navegador;
+#   4. la sesión del PROPIO navegador de esta PC (--cookies-from-browser
 #      chrome, y si Chrome está cerrado/bloqueado, edge y firefox):
 #      yt-dlp lee las cookies LOCALMENTE en esta PC, como haría el
 #      propio usuario con su sesión; nada se sube a ningún sitio.
@@ -97,14 +102,44 @@ def _es_error_cookies(stderr):
     baja = (stderr or "").lower()
     return any(p in baja for p in _PATRONES_COOKIES_FALLIDAS)
 
+def _ruta_cookies_txt():
+    """Ruta del cookies.txt de la sesión del dueño, si existe.
+
+    El dueño lo exporta UNA vez desde su navegador (con la sesión de
+    YouTube iniciada) y lo guarda en la carpeta de datos del motor
+    (~/JDMViralClips/cookies.txt) o junto al motor. Es la vía más
+    fiable contra el muro de login: a diferencia de
+    --cookies-from-browser, no depende de que yt-dlp pueda descifrar
+    la base de cookies del navegador (Chrome y Edge modernos la
+    protegen con cifrado ligado a la app y la extracción falla).
+    Se busca en: $JDM_COOKIES_TXT, ~/JDMViralClips/cookies.txt y la
+    carpeta del propio resolver. Devuelve None si no hay ninguno."""
+    candidatos = []
+    env = os.environ.get("JDM_COOKIES_TXT")
+    if env:
+        candidatos.append(Path(env))
+    candidatos.append(Path.home() / "JDMViralClips" / "cookies.txt")
+    candidatos.append(Path(__file__).resolve().parent / "cookies.txt")
+    for ruta in candidatos:
+        try:
+            if ruta.is_file() and ruta.stat().st_size > 0:
+                return str(ruta)
+        except OSError:
+            continue
+    return None
+
 def _intentos_resolucion(url):
     """La cadena ordenada de intentos: [(descripción, argumentos extra)]."""
     intentos = [("la vía habitual", ())]
     host = _host(url)
     if host == "youtube.com" or host.endswith(".youtube.com") or host == "youtu.be":
-        for cliente in ("android", "ios", "web_safari"):
+        for cliente in ("tv", "android", "ios", "web_safari", "web_embedded"):
             intentos.append((f"el cliente «{cliente}» de YouTube",
                              ("--extractor-args", f"youtube:player_client={cliente}")))
+    cookies = _ruta_cookies_txt()
+    if cookies:
+        intentos.append(("el archivo cookies.txt de tu sesión",
+                         ("--cookies", cookies)))
     for navegador in ("chrome", "edge", "firefox"):
         intentos.append((f"la sesión de {navegador} abierta en esta PC",
                          ("--cookies-from-browser", navegador)))
@@ -178,7 +213,7 @@ def resolver_fuente(url):
     ultimo_error = ""
     hubo_login = False
     for descripcion, extra in intentos:
-        es_intento_cookies = "--cookies-from-browser" in extra
+        es_intento_cookies = "--cookies-from-browser" in extra or "--cookies" in extra
         try:
             rc, out, err = _ejecutar_ytdlp(u, extra)
         except ErrorResolucion as e:
@@ -216,7 +251,10 @@ def resolver_fuente(url):
             "La plataforma siguió pidiendo iniciar sesión tras intentarlo por "
             + ", ".join(probados) + ". Ninguna vía entregó la señal. "
             "Si es un video de una cuenta tuya, comprueba que esa cuenta tenga la "
-            "sesión abierta en Chrome en esta PC y vuelve a intentarlo; si no, usa "
+            "sesión abierta en Chrome en esta PC y vuelve a intentarlo; la vía "
+            "más segura es guardar un cookies.txt de tu sesión de YouTube en la "
+            "carpeta de datos del motor (JDMViralClips\\cookies.txt): el motor lo "
+            "usa solo, sin tocar tu navegador. Si no, usa "
             "un HLS o RTMP de una emisión que controles, o importa un video propio. "
             f"Último motivo de la plataforma: {ultimo_error}")
     raise ErrorResolucion(

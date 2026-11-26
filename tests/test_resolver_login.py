@@ -6,14 +6,21 @@ bien. El resolver se rendía en el primer intento.
 
 Arreglo: CADENA de reintentos reales en resolver_fuente —
 1) vía habitual, 2) clientes alternativos de YouTube
-(player_client android/ios/web_safari), 3) la sesión del navegador de
-la propia PC (--cookies-from-browser chrome/edge/firefox; yt-dlp lee
-las cookies localmente, nada se sube). Solo el muro de login (o un
-navegador que no entrega sus cookies) pasa al siguiente intento; el
-éxito corta la cadena y los errores definitivos (privado, no
-disponible, formato) se reportan al momento. El error final dice qué
-se intentó. Todo con el ejecutor de yt-dlp SIMULADO: ningún test
+(player_client tv/android/ios/web_safari/web_embedded),
+3) el cookies.txt de la sesión del dueño si existe, 4) la sesión del
+navegador de la propia PC (--cookies-from-browser chrome/edge/firefox;
+yt-dlp lee las cookies localmente, nada se sube). Solo el muro de
+login (o un navegador que no entrega sus cookies) pasa al siguiente
+intento; el éxito corta la cadena y los errores definitivos (privado,
+no disponible, formato) se reportan al momento. El error final dice
+qué se intentó. Todo con el ejecutor de yt-dlp SIMULADO: ningún test
 llama a YouTube de verdad.
+
+v1.3.13 (2026-11-26): el muro volvió a cerrar TODAS las vías de la
+sesión #34 (que había grabado bien la noche anterior). Se suman el
+cliente «tv» (suele pasar sin sesión), «web_embedded» y la vía del
+cookies.txt exportado por el dueño, inmune al cifrado de cookies de
+Chrome/Edge modernos que rompe --cookies-from-browser.
 """
 import pytest
 
@@ -46,25 +53,27 @@ def test_camino_normal_sin_cambios_un_solo_intento(monkeypatch):
     assert len(llamadas) == 1 and llamadas[0][1] == ()
 
 
-def test_login_en_el_primero_pasa_al_cliente_android(monkeypatch):
+def test_login_en_el_primero_pasa_al_cliente_tv(monkeypatch):
     llamadas = _falso(monkeypatch, [FALLO_MURO, OK])
     assert resolver.resolver_fuente("https://www.youtube.com/watch?v=Dxi1CRQMQZo") == \
         "https://rr5.googlevideo.com/videoplayback?x=1"
     assert len(llamadas) == 2
-    assert llamadas[1][1] == ("--extractor-args", "youtube:player_client=android")
+    assert llamadas[1][1] == ("--extractor-args", "youtube:player_client=tv")
 
 
 def test_login_en_todos_error_final_honesto_con_lo_intentado(monkeypatch):
+    monkeypatch.setattr(resolver, "_ruta_cookies_txt", lambda: None)
     llamadas = _falso(monkeypatch, [FALLO_MURO])
     with pytest.raises(resolver.ErrorResolucion) as e:
         resolver.resolver_fuente("https://www.youtube.com/watch?v=Dxi1CRQMQZo")
     msg = str(e.value)
-    # 1 habitual + 3 clientes + 3 navegadores = 7 intentos reales.
-    assert len(llamadas) == 7
-    for via in ("vía habitual", "android", "ios", "web_safari",
-                "chrome", "edge", "firefox"):
+    # 1 habitual + 5 clientes + 3 navegadores = 9 intentos reales.
+    assert len(llamadas) == 9
+    for via in ("vía habitual", "tv", "android", "ios", "web_safari",
+                "web_embedded", "chrome", "edge", "firefox"):
         assert via in msg, f"el error final no cuenta el intento «{via}»"
     assert "siguió pidiendo iniciar sesión" in msg
+    assert "cookies.txt" in msg
 
 
 def test_error_definitivo_corta_la_cadena(monkeypatch):
@@ -75,18 +84,41 @@ def test_error_definitivo_corta_la_cadena(monkeypatch):
 
 
 def test_chrome_bloqueado_pasa_a_edge(monkeypatch):
+    monkeypatch.setattr(resolver, "_ruta_cookies_txt", lambda: None)
     llamadas = _falso(monkeypatch, [
-        FALLO_MURO, FALLO_MURO, FALLO_MURO, FALLO_MURO,
+        FALLO_MURO, FALLO_MURO, FALLO_MURO, FALLO_MURO, FALLO_MURO, FALLO_MURO,
         (1, "", "ERROR: Could not copy Chrome cookie database"),
         OK,
     ])
     assert resolver.resolver_fuente("https://www.youtube.com/watch?v=Dxi1CRQMQZo") == \
         "https://rr5.googlevideo.com/videoplayback?x=1"
-    assert llamadas[4][1] == ("--cookies-from-browser", "chrome")
-    assert llamadas[5][1] == ("--cookies-from-browser", "edge")
+    assert llamadas[6][1] == ("--cookies-from-browser", "chrome")
+    assert llamadas[7][1] == ("--cookies-from-browser", "edge")
+
+
+def test_cookies_txt_en_la_cadena_tras_los_clientes(monkeypatch):
+    monkeypatch.setattr(resolver, "_ruta_cookies_txt",
+                        lambda: "C:\\Users\\thene\\JDMViralClips\\cookies.txt")
+    intentos = resolver._intentos_resolucion("https://www.youtube.com/watch?v=abc")
+    extras = [e for _, e in intentos]
+    via_cookies = ("--cookies", "C:\\Users\\thene\\JDMViralClips\\cookies.txt")
+    assert via_cookies in extras
+    # Tras el último cliente de YouTube y antes de los navegadores.
+    assert extras.index(via_cookies) == 6
+    assert extras.index(("--cookies-from-browser", "chrome")) == 7
+
+
+def test_cookies_txt_resuelve_tras_el_muro(monkeypatch):
+    monkeypatch.setattr(resolver, "_ruta_cookies_txt",
+                        lambda: "C:\\Users\\thene\\JDMViralClips\\cookies.txt")
+    llamadas = _falso(monkeypatch, [FALLO_MURO] * 6 + [OK])
+    assert resolver.resolver_fuente("https://www.youtube.com/watch?v=Dxi1CRQMQZo") == \
+        "https://rr5.googlevideo.com/videoplayback?x=1"
+    assert llamadas[6][1] == ("--cookies", "C:\\Users\\thene\\JDMViralClips\\cookies.txt")
 
 
 def test_otra_plataforma_sin_clientes_youtube_pero_con_cookies(monkeypatch):
+    monkeypatch.setattr(resolver, "_ruta_cookies_txt", lambda: None)
     intentos = resolver._intentos_resolucion("https://www.facebook.com/watch?v=1")
     extras = [e for _, e in intentos]
     assert not any("player_client" in " ".join(e) for e in extras)

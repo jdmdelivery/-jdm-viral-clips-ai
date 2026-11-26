@@ -5,7 +5,7 @@ Uso: python worker.py --config worker-config.json   (ver README.md)"""
 import argparse, json, os, subprocess, sys, threading, time
 from pathlib import Path
 
-VERSION = "1.3.11"
+VERSION = "1.3.13"
 sys.path.insert(0, str(Path(__file__).parent))
 from procesos import SIN_VENTANA
 import instancia
@@ -423,6 +423,39 @@ def _hilo_actualizador(config_path, hay_grabacion=None):
     except Exception as e:
         print(f"Actualizador: hilo detenido por un error: {e}")
 
+def _hilo_ytdlp():
+    """Mantiene yt-dlp al día en esta PC (v1.3.13).
+
+    El muro de login/anti-bots de YouTube cambia cada pocas semanas y
+    la cura habitual es un yt-dlp más nuevo: el que instaló el
+    instalador en su día se queda viejo y de pronto TODAS las vías del
+    resolver caen con «Sign in to confirm» aunque el video sea público
+    (pasó el 2026-11-26: la sesión #34 grabó bien hasta la noche del
+    25 y a la mañana siguiente ninguna vía entregó la señal). Este
+    hilo corre «pip install --upgrade yt-dlp» al poco del arranque y
+    luego una vez al día. Es best-effort: cualquier fallo (sin red,
+    pip ocupado) se anota en el log y NUNCA tumba el motor; la
+    grabación no se toca."""
+    try:
+        time.sleep(45)
+        while True:
+            try:
+                r = subprocess.run([sys.executable, "-m", "pip", "install",
+                                    "--upgrade", "--quiet", "yt-dlp"],
+                                   capture_output=True, text=True, timeout=600,
+                                   creationflags=SIN_VENTANA)
+                if r.returncode == 0:
+                    print("yt-dlp: actualizado a la última versión disponible.")
+                else:
+                    detalle = (r.stderr or r.stdout or "").strip().splitlines()
+                    print(f"yt-dlp: la actualización falló (rc={r.returncode}): "
+                          f"{detalle[-1][:200] if detalle else 'sin detalle'}")
+            except Exception as e:
+                print(f"yt-dlp: no se pudo actualizar ({e}); se sigue con el actual.")
+            time.sleep(24 * 60 * 60)
+    except Exception as e:
+        print(f"yt-dlp: hilo detenido por un error: {e}")
+
 def _hilo_latido(api, intervalo_s=10):
     """Latido y progreso en un hilo APARTE del bucle de trabajos.
 
@@ -506,6 +539,13 @@ def main():
     # ocupado minutos con un trabajo largo y el chip no debe pasar a
     # «desconectado» por eso (ver _hilo_latido).
     threading.Thread(target=_hilo_latido, args=(api,), daemon=True).start()
+    # yt-dlp siempre al día (v1.3.13): el muro de YouTube se mueve y un
+    # yt-dlp viejo lo convierte en «ERROR DE FUENTE» en todas las vías.
+    if cfg.get("actualizar_ytdlp", True):
+        try:
+            threading.Thread(target=_hilo_ytdlp, daemon=True).start()
+        except Exception as e:
+            print(f"yt-dlp: no se pudo iniciar el hilo de actualización: {e}")
     print(f"Motor JDM Viral Clips AI v{VERSION} conectado a {cfg['api_url']} — Ctrl+C para salir")
     try:
         from subtitulos import iniciar_cola
