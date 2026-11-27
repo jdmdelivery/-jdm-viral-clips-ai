@@ -16,7 +16,12 @@ Sin relleno: una ventana por debajo del umbral no se reporta aunque sea el
 máximo local. Segmentos consecutivos sobre el umbral forman UNA ventana
 (el momento completo); la ventana se cierra con el primer segmento flojo
 o al detener la grabación, y nunca se repite un momento ya reportado
-(solape >70% contra lo reportado en esta sesión de radar)."""
+(solape >70% contra lo reportado en esta sesión de radar).
+
+Modo «epicos» (v1.3.16): cada segmento también se mide en movimiento
+(vision.movimiento_detalle) para clasificar «baile» y «pelea», y SOLO
+las ventanas de tipo discusión/pelea/baile generan clip; el resto se
+descarta en silencio, como un segmento flojo más."""
 import subprocess, threading, time
 from pathlib import Path
 from procesos import SIN_VENTANA
@@ -95,6 +100,13 @@ class RadarSesion:
         escenas = vision.cambios_de_escena(path)
         senales = {"rms_medio_db": medio, "rms_pico_db": pico,
                    "cambios_escena": escenas, "duracion_s": entrada["duracion_s"]}
+        # Movimiento (v1.3.16): serie de diferencias entre frames. Sin
+        # esta señal no hay «baile» ni «pelea»; si la medición falla, el
+        # segmento se puntúa como siempre (nunca se finge la señal).
+        mov = vision.movimiento_detalle(path)
+        if mov.get("disponible"):
+            senales.update({"mov_medio": mov["mov_medio"], "mov_pico": mov["mov_pico"],
+                            "mov_fraccion_activa": mov["fraccion_activa"]})
         score, desglose = viral.puntuar(senales, self.modo)
         return score, desglose, viral.clasificar(senales, self.modo)
 
@@ -244,7 +256,13 @@ class RadarSesion:
             except Exception as e:
                 self.errores.append(f"puntuando segmento {entrada['indice']}: {e}")
                 continue
-            if score >= self.umbral:
+            # Modo Épicos (v1.3.16): un segmento solo abre o extiende
+            # ventana si su tipo es discusión/pelea/baile; cualquier
+            # otro momento, aunque supere el umbral, se trata como
+            # segmento flojo (cierra la ventana abierta y no genera
+            # clip). En los demás modos la condición es la de siempre.
+            apto = score >= self.umbral and (self.modo != "epicos" or tipo in viral.TIPOS_EPICOS)
+            if apto:
                 if self._ventana is None:
                     self._ventana = {"start_s": entrada["inicio_s"],
                                      "end_s": entrada["inicio_s"] + entrada["duracion_s"],

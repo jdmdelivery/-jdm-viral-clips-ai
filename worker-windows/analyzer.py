@@ -41,6 +41,12 @@ def analizar_video(fuente, outdir, modo="general", pre_s=30, post_s=25,
         fin_i = inicios[i + 1] if i + 1 < len(segs) else total
         senales = {"rms_medio_db": medio, "rms_pico_db": pico,
                    "cambios_escena": escenas, "duracion_s": round(fin_i - inicios[i], 2)}
+        # Movimiento (v1.3.16): habilita los tipos «baile» y «pelea»;
+        # si la medición no está disponible, el segmento va sin la señal.
+        mov = vision.movimiento_detalle(p)
+        if mov.get("disponible"):
+            senales.update({"mov_medio": mov["mov_medio"], "mov_pico": mov["mov_pico"],
+                            "mov_fraccion_activa": mov["fraccion_activa"]})
         score, desglose = viral.puntuar(senales, modo)
         med = {"segmento": i, "inicio_s": round(inicios[i], 2), **senales, "score": score}
         if con_rostros:
@@ -48,8 +54,10 @@ def analizar_video(fuente, outdir, modo="general", pre_s=30, post_s=25,
             # frame por segmento, el central, para no encarecer el pipeline.
             med["rostros"] = vision.detectar_rostros(p)
         mediciones.append(med)
-        if score >= umbral_evento:
-            eventos.append({"type": viral.clasificar(senales, modo), "mode": modo,
+        tipo = viral.clasificar(senales, modo)
+        # Modo Épicos (v1.3.16): solo discusión/pelea/baile son eventos.
+        if score >= umbral_evento and (modo != "epicos" or tipo in viral.TIPOS_EPICOS):
+            eventos.append({"type": tipo, "mode": modo,
                             "start_s": round(inicios[i], 2), "end_s": round(fin_i, 2),
                             "score": score, "breakdown": desglose, "_segmento": i})
     # Etapa 2: deduplicación por solape (>70% del intervalo menor) antes de

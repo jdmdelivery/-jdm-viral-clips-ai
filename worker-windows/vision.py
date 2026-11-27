@@ -143,3 +143,49 @@ def conteo_movimiento(path, fps=2, ancho=64, alto=36):
                 "nota": f"Diferencia media entre frames ({fps} fps, {ancho}x{alto} gris), sin opencv."}
     except Exception as e:
         return {"disponible": False, "movimiento": None, "nota": f"conteo_movimiento falló: {e}"}
+
+# Umbral de «par activo» para movimiento_detalle: diferencia media entre
+# frames consecutivos (escala 0-255, gris 64x36 a 2 fps) a partir de la
+# cual el instante se considera con movimiento real y no ruido de
+# compresión o un gesto mínimo. Una persona hablando casi quieta queda
+# en ~0-3; gesticular da ~4-10; el cuerpo entero en acción supera 8 en
+# la mayoría de los pares.
+UMBRAL_PAR_ACTIVO = 8.0
+
+def movimiento_detalle(path, fps=2, ancho=64, alto=36):
+    """Detalle de movimiento SIN opencv (v1.3.16): la misma decodificación
+    que conteo_movimiento(), pero conservando la serie por pares para
+    distinguir CÓMO se mueve la escena, no solo cuánto:
+      - mov_medio: diferencia media de todos los pares (0-255).
+      - mov_pico: el par más violento (un golpe, un empujón, un salto).
+      - fraccion_activa: qué parte del segmento tuvo movimiento real
+        (pares >= UMBRAL_PAR_ACTIVO): el baile la sostiene alta; una
+        reacción breve, no.
+    Sin al menos 2 frames: disponible False y valores None (el análisis
+    sigue sin esta señal; nadie la finge)."""
+    try:
+        tam = ancho * alto
+        r = subprocess.run(["ffmpeg", "-v", "error", "-i", str(path),
+                            "-vf", f"fps={fps},scale={ancho}:{alto},format=gray",
+                            "-f", "rawvideo", "-"], capture_output=True, timeout=600, creationflags=SIN_VENTANA)
+        datos = r.stdout
+        n_frames = len(datos) // tam
+        if r.returncode != 0 or n_frames < 2:
+            return {"disponible": False, "mov_medio": None, "mov_pico": None,
+                    "fraccion_activa": None,
+                    "nota": "No se pudieron decodificar al menos 2 frames con FFmpeg."}
+        diffs = []
+        for f in range(1, n_frames):
+            a = datos[(f - 1) * tam: f * tam]
+            b = datos[f * tam: (f + 1) * tam]
+            diffs.append(sum(abs(x - y) for x, y in zip(a, b)) / tam)
+        activos = sum(1 for d in diffs if d >= UMBRAL_PAR_ACTIVO)
+        return {"disponible": True,
+                "mov_medio": round(sum(diffs) / len(diffs), 3),
+                "mov_pico": round(max(diffs), 3),
+                "fraccion_activa": round(activos / len(diffs), 3),
+                "frames": n_frames,
+                "nota": f"Serie de diferencias entre frames ({fps} fps, {ancho}x{alto} gris), sin opencv."}
+    except Exception as e:
+        return {"disponible": False, "mov_medio": None, "mov_pico": None,
+                "fraccion_activa": None, "nota": f"movimiento_detalle falló: {e}"}

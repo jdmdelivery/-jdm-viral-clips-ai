@@ -283,7 +283,7 @@ def test_latido_late_y_reporta_progreso_en_su_hilo(monkeypatch):
 # 5. Versión visible (pin vigente; la fijó la v1.3.9 y la mueve cada release)
 # ---------------------------------------------------------------------------
 def test_version_1_3_9():
-    assert worker_mod.VERSION == "1.3.15"
+    assert worker_mod.VERSION == "1.3.16"
     manifiesto = json.loads((Path(__file__).resolve().parents[1]
                              / "worker-windows" / "manifest.json").read_text(encoding="utf-8"))
-    assert manifiesto["version"] == "1.3.15"
+    assert manifiesto["version"] == "1.3.16"

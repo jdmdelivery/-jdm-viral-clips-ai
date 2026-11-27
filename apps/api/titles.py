@@ -2,6 +2,8 @@
 Nunca inventa declaraciones: si no hay transcripción, describe el TIPO de momento."""
 TIPOS = {
     "discusion": ("Discusión intensa", ["discusión", "debate"]),
+    "pelea": ("¡Se armó la pelea!", ["pelea", "enfrentamiento"]),
+    "baile": ("Baile y fiesta en vivo", ["baile", "fiesta"]),
     "gritos": ("Gritos y reacción fuerte", ["reacción"]),
     "risas": ("Momento de risas", ["risas", "gracioso"]),
     "sorpresa": ("Reacción sorprendente", ["sorpresa", "inesperado"]),
