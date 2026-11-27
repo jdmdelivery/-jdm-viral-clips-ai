@@ -5,13 +5,14 @@ Uso: python worker.py --config worker-config.json   (ver README.md)"""
 import argparse, json, os, subprocess, sys, threading, time
 from pathlib import Path
 
-VERSION = "1.3.13"
+VERSION = "1.3.14"
 sys.path.insert(0, str(Path(__file__).parent))
 from procesos import SIN_VENTANA
 import instancia
 from sync import ApiClient
 from recorder import Recorder, VENTANA_PODA_S
 from analyzer import analizar_video
+import resolver
 from resolver import resolver_fuente, es_pagina_plataforma, es_archivo_local
 from radar import RadarSesion
 
@@ -423,6 +424,30 @@ def _hilo_actualizador(config_path, hay_grabacion=None):
     except Exception as e:
         print(f"Actualizador: hilo detenido por un error: {e}")
 
+def _conectar_sesion_propia(cfg):
+    """Sesión de YouTube propia del motor (v1.3.14): conecta el gancho
+    de refresco del resolver con sesion_youtube (perfil de navegador
+    dedicado en la carpeta de datos + exportación de cookies por CDP,
+    HttpOnly incluidas) y deja en el log el aviso si el cookies.txt
+    que ya hubiera no trae la sesión. Es best-effort: cualquier fallo
+    se anota y el motor sigue con la cadena de siempre del resolver.
+    Se apaga con "sesion_youtube_propia": false en la configuración."""
+    if not cfg.get("sesion_youtube_propia", True):
+        print("Sesión de YouTube propia: desactivada en esta configuración.")
+        return
+    try:
+        import sesion_youtube
+        os.environ.setdefault("JDM_CARPETA_DATOS", str(_carpeta_datos(cfg)))
+        resolver.gancho_refresco_sesion = sesion_youtube.refrescar_sesion
+        aviso = sesion_youtube.aviso_cookies_invalidas()
+        if aviso:
+            print(aviso)
+        print("Sesión de YouTube propia del motor: activa (perfil dedicado "
+              "en la carpeta de datos; refresco por CDP ante el muro de login).")
+    except Exception as e:
+        print(f"Sesión de YouTube propia: no se pudo activar ({e}); se sigue "
+              "con las vías de siempre del resolver.")
+
 def _hilo_ytdlp():
     """Mantiene yt-dlp al día en esta PC (v1.3.13).
 
@@ -546,6 +571,10 @@ def main():
             threading.Thread(target=_hilo_ytdlp, daemon=True).start()
         except Exception as e:
             print(f"yt-dlp: no se pudo iniciar el hilo de actualización: {e}")
+    # Sesión de YouTube propia (v1.3.14): si el muro de login cierra
+    # todas las vías, el resolver refresca las cookies desde el
+    # perfil dedicado del motor antes de rendirse.
+    _conectar_sesion_propia(cfg)
     print(f"Motor JDM Viral Clips AI v{VERSION} conectado a {cfg['api_url']} — Ctrl+C para salir")
     try:
         from subtitulos import iniciar_cola

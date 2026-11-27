@@ -194,15 +194,11 @@ def es_archivo_local(url):
     except OSError:
         return False
 
-def resolver_fuente(url):
-    """Devuelve la URL lista para FFmpeg. Ver docstring del módulo.
-
-    Las páginas de plataforma se resuelven con la cadena de intentos
-    de _intentos_resolucion: el éxito de CUALQUIER intento corta la
-    cadena. Un error que no sea el muro de login (privado, no
-    disponible, formato, en vivo sin comenzar) es definitivo y se
-    reporta al momento. Si TODOS los intentos caen ante el muro, el
-    error final dice con honestidad qué se intentó."""
+def _resolver_con_cadena(url):
+    """La cadena de intentos tal como quedó en la v1.3.13. Si TODOS
+    los intentos caen ante el muro de login, el ErrorResolucion lleva
+    el atributo es_muro_login=True: resolver_fuente lo usa para dar
+    UNA oportunidad al refresco de la sesión propia (v1.3.14)."""
     u = str(url)
     if es_archivo_local(u):
         return str(Path(u).resolve())
@@ -247,7 +243,7 @@ def resolver_fuente(url):
         # no tiene sentido gastar el resto de la cadena.
         raise ErrorResolucion(_error_desde_stderr(err))
     if hubo_login:
-        raise ErrorResolucion(
+        error = ErrorResolucion(
             "La plataforma siguió pidiendo iniciar sesión tras intentarlo por "
             + ", ".join(probados) + ". Ninguna vía entregó la señal. "
             "Si es un video de una cuenta tuya, comprueba que esa cuenta tenga la "
@@ -257,6 +253,63 @@ def resolver_fuente(url):
             "usa solo, sin tocar tu navegador. Si no, usa "
             "un HLS o RTMP de una emisión que controles, o importa un video propio. "
             f"Último motivo de la plataforma: {ultimo_error}")
+        error.es_muro_login = True
+        raise error
     raise ErrorResolucion(
         "No se pudo resolver la señal tras intentarlo por "
         + ", ".join(probados) + f". Último motivo: {ultimo_error}")
+
+# --- Sesión de YouTube propia del motor (v1.3.14) ---------------------------
+# Cuando TODAS las vías caen ante el muro de login, queda una carta
+# más: la sesión PROPIA del motor (sesion_youtube.py) — un perfil de
+# navegador dedicado del que el motor exporta las cookies por CDP,
+# HttpOnly incluidas, al cookies.txt que la cadena ya sabe usar.
+# worker.py conecta el gancho al arrancar el motor real asignando
+# resolver.gancho_refresco_sesion = sesion_youtube.refrescar_sesion.
+# Sin gancho (None: tests y usos sueltos del resolver) el
+# comportamiento es EXACTAMENTE el de la v1.3.13. El refresco se
+# intenta UNA sola vez por llamada y nunca en bucle: si tras
+# refrescar la cadena vuelve a caer ante el muro, manda el error.
+
+gancho_refresco_sesion = None
+
+def _intentar_refresco_sesion():
+    """Consulta el gancho de la sesión propia. Devuelve
+    (reintentar, aviso). Un gancho que explota nunca tumba la
+    resolución: se traga el fallo y manda el error original."""
+    if gancho_refresco_sesion is None:
+        return False, ""
+    try:
+        resultado = gancho_refresco_sesion()
+    except Exception:
+        return False, ""
+    if isinstance(resultado, tuple) and len(resultado) == 2:
+        return bool(resultado[0]), str(resultado[1] or "")
+    return bool(resultado), ""
+
+def resolver_fuente(url):
+    """Devuelve la URL lista para FFmpeg. Ver docstring del módulo.
+
+    Las páginas de plataforma se resuelven con la cadena de intentos
+    de _intentos_resolucion: el éxito de CUALQUIER intento corta la
+    cadena. Un error que no sea el muro de login (privado, no
+    disponible, formato, en vivo sin comenzar) es definitivo y se
+    reporta al momento. Si TODOS los intentos caen ante el muro, el
+    error final dice con honestidad qué se intentó.
+
+    v1.3.14: antes de rendirse ante el muro, si el motor conectó el
+    gancho de su sesión propia, se intenta UN refresco (exportar las
+    cookies del perfil dedicado por CDP) y la cadena se repite una
+    sola vez; si el perfil aún no tiene sesión, el aviso del refresco
+    (la ventana de login que se abrió) se añade al error final."""
+    try:
+        return _resolver_con_cadena(url)
+    except ErrorResolucion as e:
+        if not getattr(e, "es_muro_login", False):
+            raise
+        reintentar, aviso = _intentar_refresco_sesion()
+        if reintentar:
+            return _resolver_con_cadena(url)
+        if aviso:
+            raise ErrorResolucion(f"{e} {aviso}")
+        raise

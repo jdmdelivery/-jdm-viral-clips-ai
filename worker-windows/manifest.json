@@ -2,25 +2,31 @@
   "files": {
     "actualizador.py": "020bce83d887c4005a86a094f4c84e30ad593ea2c0ab58b0fa4389efab77e4d4",
     "analyzer.py": "cc2f7202ce36f1b796ac9c33f436a84848bae134618b613c1570a8d5c7e5ad08",
+    "biblioteca_recursos.py": "1b2e25a140f5a558818a527d8d0c773cf0e74cabf2169da8b8e1874b53f0aa50",
     "buffer.py": "fb22bef60145e831dcbd73a91f3063c0b0a0b99c867e295b3374c7bf64383e7d",
+    "capas_recursos.py": "354d17fac4ed7993e35638e98a72664ff54734076fcf50ed6a188720a952672e",
     "clipper.py": "42f157a863e94152f2bb916837d4b0ce3638cb70478a8eeb34d90d5374fb5c18",
     "dedup.py": "5844ec67aa90de00baa151525a26e030ea3e033b7f7297a74634ea73ec63536b",
+    "descargar_recursos.py": "0ea538f93512e58204a0e4e38170ff01c5e899f84c2fa1bc58ef90124515bab9",
     "editor.py": "3706834e83f548c57666107fe6057afa0d36aa76dc0e11b1f956c2f7cabdcacd",
+    "editor_inteligente.py": "76627562ba37a9ba3bcd36c59ad8244380042d20651969fb7f25ad153925bbf6",
     "install-worker.bat": "0d5a5e6f77ddee804b918b297a5372414dd8a3830fa2eaa0aca52812f5bda8e0",
     "install-worker.ps1": "05b0ac2abc25d9b0ccc31016270a7d167a650a2d431e4ac907a3bac65bfa0553",
     "instancia.py": "c5f46b46a3f8b29974938b1d6fa21cb42090d4ffd2db9dd95bdee00a55bc117e",
+    "ollama_local.py": "c7387d5982fad9312f83c3ec9cb9d44687ad233b8c3c41c8171cdf0216da7fe1",
     "procesos.py": "ffb78f877a2dc6ebe74be62d979634b9cac3d044dde548ab305b331ce50385e6",
     "radar.py": "127dfc5cd010496f78e5b4fda3babeaba0b103a022a40dc0ae2b292cbb5c9c36",
     "recorder.py": "12b6ec92839b4240d2ab9db8488c0cbecef376e5f077b4503a7252d2373b4b33",
     "requirements.txt": "ac30d731b1cc532e45a2df0ba9c065375592e66de867fbc6ea6c0c67fefca940",
-    "resolver.py": "48034bfc972b17050401fa164de8953374281878388c33aeafb8d66071b12a8d",
+    "resolver.py": "f6f9c951c6f2e0bffa1c0c23e5c20d2a447901a9f2a185e01726a4fc6772444a",
+    "sesion_youtube.py": "c5b91fa82ac0b960d23a28ca965a67e07578d73a73d51f03e30ad856f6d9bfab",
     "subtitulos.py": "00436c76593faeb99923c38c930a0255792fd8c707aaf6c6151bc1e92eb179eb",
     "sync.py": "bdb8c03c2563ba05ddb5723d0081b98350150b9195ecbe10c440bad95453a178",
     "titles.py": "dd7c4f1e8d25ce7bb81480212f0cd633a4ac3ef9a019fcda2178f49515b80b2d",
     "transcribe.py": "f2f43819d34833ec1a4f538a02944f5735b03c6a00828ee2d6228216d73167d0",
     "viral.py": "5fc32a546c762d16564c7ae040570c023004cf10e3b4910d15bc76b00734888c",
     "vision.py": "a57c2b142ba15ab12b61b3fe4c283c73a0048ec78db9e3da7c07519cbc5d37a0",
-    "worker.py": "6d8f5e4a0678223e13727a6d55d1f3115f19411f9b5a3afc07fc7bbe891ca994"
+    "worker.py": "aeb409e40ff180fb4625ba4fb6d29fbe7b498e2c3559067523818f3969dcc47a"
   },
-  "version": "1.3.13"
+  "version": "1.3.14"
 }
