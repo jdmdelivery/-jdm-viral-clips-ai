@@ -37,6 +37,12 @@ ARCHIVO_PID = "ffmpeg.pid"
 # margen y acotan la carpeta de la sesión a ~0,7-1,2 GB.
 VENTANA_PODA_S = 45 * 60
 INTERVALO_PODA_S = 20
+# Rotación de la captura en vivo (v1.3.15): ningún FFmpeg graba más de
+# este tiempo de corrido. Al cumplirse, el bucle lo reinicia con señal
+# fresca (sin gastar reintentos: no es una caída). Acota el desfase
+# audio/video que las señales separadas de plataforma acumulan con las
+# horas: cada reinicio vuelve a alinear ambas pistas desde cero.
+MAX_CAPTURA_CONTINUA_S = 30 * 60
 
 def _pid_vivo(pid):
     """True si el proceso `pid` existe ahora mismo. Nunca lanza."""
@@ -153,14 +159,26 @@ def _cmd_grabar(fuente, outdir, start_number=0, en_vivo=False):
     # sola URL el comando es el histórico.
     entradas = [l.strip() for l in str(fuente).splitlines() if l.strip()]
     if not entradas: entradas = [str(fuente)]
+    # Sincronía audio/video (v1.3.15): con DOS señales en vivo (video y
+    # audio por separado, el par «bv*+ba» del resolver) cada una trae su
+    # propio reloj y FFmpeg las unía como si arrancaran a la vez: la voz
+    # se iba quedando detrás del video, peor a más horas de sesión. Con
+    # «use_wallclock_as_timestamps» ambas entradas se sellan con el
+    # MISMO reloj (el de llegada) y nacen alineadas. Solo en vivo y solo
+    # con dos entradas: una señal combinada ya trae sus marcas correctas
+    # y en un archivo el reloj de pared corrompería sus tiempos.
+    alinear_reloj = en_vivo and len(entradas) > 1
     for entrada in entradas:
         if en_vivo: cmd += ["-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5"]
+        if alinear_reloj: cmd += ["-use_wallclock_as_timestamps", "1"]
         cmd += ["-i", entrada]
     cmd += ["-map", "0:v:0?", "-map", f"{len(entradas) - 1}:a:0?",
             "-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2",
             "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p", "-sc_threshold", "0",
             "-force_key_frames", f"expr:gte(t,n_forced*{SEG})",
-            "-c:a", "aac", "-ar", "48000",
+            "-c:a", "aac", "-ar", "48000"]
+    if alinear_reloj: cmd += ["-start_at_zero"]
+    cmd += [
             "-f", "segment", "-segment_time", str(SEG), "-reset_timestamps", "1",
             "-segment_start_number", str(start_number),
             str(Path(outdir) / "seg_%05d.mp4")]
@@ -345,6 +363,8 @@ class Recorder:
                                          stdout=subprocess.DEVNULL, stderr=log, creationflags=SIN_VENTANA)
             self._anotar_pid()
             self._log_fh = log
+            t_corrida = time.time()
+            rotacion = False
             while self.proc.poll() is None and not self.detener_flag.is_set():
                 time.sleep(0.5)
                 self._registrar_nuevos(vistos)
@@ -356,11 +376,24 @@ class Recorder:
                     self._ultima_poda = time.time()
                     try: self.podar_rodante()
                     except Exception: pass
+                # Rotación (v1.3.15): cumplido el máximo de captura
+                # continua, se cierra este FFmpeg y el bucle exterior lo
+                # reinicia con señal fresca (ver MAX_CAPTURA_CONTINUA_S).
+                if self.en_vivo and not rotacion and time.time() - t_corrida >= MAX_CAPTURA_CONTINUA_S:
+                    rotacion = True
+                    try: self.proc.terminate()
+                    except Exception: pass
             self._borrar_pid()
             self._registrar_nuevos(vistos)
             if self.detener_flag.is_set(): break
             # Salida inesperada: reconexión (solo fuentes en vivo; un archivo que terminó no reintenta)
             segs = self._segmentos_corrida()
+            if rotacion and segs:
+                # Reinicio programado, no una caída: no gasta reintentos.
+                start_number = max(len(segs), self._max_indice + 1)
+                self._refrescar_fuente()  # señal fresca también al rotar
+                time.sleep(2)
+                continue
             if not self.en_vivo or not segs: break
             self.reintentos += 1
             if self.reintentos > self.max_reintentos: break
