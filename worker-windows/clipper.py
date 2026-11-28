@@ -14,10 +14,117 @@ FORMATOS = {"9:16": (1080, 1920), "16:9": (1920, 1080), "1:1": (1080, 1080)}
 MIN_CLIP_S = 60.0
 MAX_CLIP_S = 120.0
 
-def exportar_clip(fuente, inicio_s, fin_s, salida, formato="9:16", subtitulos=False, srt=None):
+def _ventana_crop(src_w, src_h, out_w, out_h, centro=None, zoom=1.0):
+    """Ventana de recorte (ancho, alto, x, y) en píxeles de la FUENTE
+    para llenar el formato de salida, centrada en «centro» (x, y de la
+    fuente; por defecto el centro del cuadro) y con «zoom» < 1 para
+    acercar (la ventana se encoge alrededor del centro). Dimensiones
+    pares y ventana siempre dentro del cuadro: matemática pura."""
+    escala = max(out_w / src_w, out_h / src_h)
+    base_w, base_h = out_w / escala, out_h / escala
+    cw = max(16.0, min(float(src_w), base_w * zoom))
+    ch = max(16.0, min(float(src_h), base_h * zoom))
+    # Mantener la proporción de salida tras el zoom/recorte.
+    prop = out_w / out_h
+    if cw / ch > prop:
+        ch = cw / prop
+    else:
+        cw = ch * prop
+    if cw > src_w:
+        cw = float(src_w); ch = cw / prop
+    if ch > src_h:
+        ch = float(src_h); cw = ch * prop
+    cx, cy = centro if centro else (src_w / 2, src_h / 2)
+    x = min(max(0.0, cx - cw / 2), src_w - cw)
+    y = min(max(0.0, cy - ch / 2), src_h - ch)
+    par = lambda v: max(2, int(round(v / 2.0)) * 2)
+    cw, ch = par(cw), par(ch)
+    # El redondeo a pares puede empujar la ventana 1-2 px fuera: se
+    # re-encaja dentro del cuadro para que crop nunca falle.
+    x = min(par(x) if x > 0 else 0, max(0, src_w - cw))
+    y = min(par(y) if y > 0 else 0, max(0, src_h - ch))
+    return cw, ch, x, y
+
+
+def _datos_fuente(fuente):
+    """(ancho, alto, hay_audio) de la fuente según ffprobe."""
+    r = subprocess.run(["ffprobe", "-v", "error", "-show_entries",
+                        "stream=codec_type,width,height", "-of", "csv=p=0", str(fuente)],
+                       capture_output=True, text=True, timeout=60, creationflags=SIN_VENTANA)
+    ancho = alto = 0
+    audio = False
+    for linea in (r.stdout or "").splitlines():
+        partes = [p.strip() for p in linea.split(",")]
+        if "video" in partes:
+            nums = [p for p in partes if p.isdigit()]
+            if len(nums) >= 2:
+                ancho, alto = int(nums[0]), int(nums[1])
+        if "audio" in partes:
+            audio = True
+    return ancho, alto, audio
+
+
+ZOOM_GANCHO = 0.62   # acercamiento del gancho sobre la cara/el centro
+
+
+def _exportar_con_gancho(fuente, inicio_s, fin_s, salida, formato, pico_s, gancho_s):
+    """Exportación con GANCHO + ZOOM A LA CARA (v1.3.20, pedido de Jose
+    el 2026-11-28: «que los videos sean más duros y más virales»):
+    el clip abre con los «gancho_s» segundos del momento pico (con un
+    zoom fuerte a la cara detectada en ese instante) y luego corre el
+    clip completo con el encuadre centrado en esa misma cara (o el
+    centro de siempre si no se detecta rostro). Una sola corrida de
+    FFmpeg con las dos entradas y concat. Cualquier fallo burla esta
+    vía y el llamador cae a la exportación clásica."""
+    import vision
+    w, h = FORMATOS[formato]
+    src_w, src_h, hay_audio = _datos_fuente(fuente)
+    if not src_w or not src_h:
+        raise RuntimeError("Sin dimensiones de la fuente para el gancho.")
+    centro = None
+    ub = vision.ubicar_rostro(fuente, segundo=pico_s)
+    if ub.get("disponible") and ub.get("rostro"):
+        x, y, rw, rh = ub["rostro"]
+        centro = (x + rw / 2, y + rh / 2)
+    bw, bh, bx, by = _ventana_crop(src_w, src_h, w, h, centro, 1.0)
+    hw, hh, hx, hy = _ventana_crop(src_w, src_h, w, h, centro, ZOOM_GANCHO)
+    g_ini = min(max(float(pico_s) - 0.4, float(inicio_s)), max(float(inicio_s), float(fin_s) - gancho_s))
+    g_fin = g_ini + gancho_s
+    # setsar=1: las dos ventanas tienen proporciones casi idénticas
+    # pero no exactas; sin normalizar el SAR, concat rechaza la mezcla.
+    fc = (f"[0:v]crop={hw}:{hh}:{hx}:{hy},scale={w}:{h},setsar=1[v0];"
+          f"[1:v]crop={bw}:{bh}:{bx}:{by},scale={w}:{h},setsar=1[v1];")
+    if hay_audio:
+        fc += "[v0][0:a][v1][1:a]concat=n=2:v=1:a=1[v][a]"
+        mapas = ["-map", "[v]", "-map", "[a]"]
+    else:
+        fc += "[v0][v1]concat=n=2:v=1:a=0[v]"
+        mapas = ["-map", "[v]"]
+    cmd = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+           "-ss", str(g_ini), "-to", str(g_fin), "-i", str(fuente),
+           "-ss", str(inicio_s), "-to", str(fin_s), "-i", str(fuente),
+           "-filter_complex", fc, *mapas,
+           "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p",
+           "-c:a", "aac", "-ar", "48000", "-shortest", str(salida)]
+    r = subprocess.run(cmd, capture_output=True, text=True, timeout=3600, creationflags=SIN_VENTANA)
+    if r.returncode != 0 or not Path(salida).exists():
+        raise RuntimeError(f"FFmpeg con gancho falló: {r.stderr[-400:]}")
+    return str(salida)
+
+
+def exportar_clip(fuente, inicio_s, fin_s, salida, formato="9:16", subtitulos=False, srt=None,
+                  pico_s=None, gancho_s=2.2):
     if fin_s <= inicio_s: raise ValueError("fin debe ser mayor que inicio")
     # subtitulos/srt se ignoran a propósito: no quemar SRT/ASS/VTT.
     _ = (subtitulos, srt)
+    # Gancho + zoom (v1.3.20): solo si el llamador marca el pico y la
+    # ventana da para ello; si la vía nueva falla, se cae a la clásica.
+    if pico_s is not None and (fin_s - inicio_s) >= 10.0:
+        try:
+            return _exportar_con_gancho(fuente, inicio_s, fin_s, salida, formato,
+                                        float(pico_s), float(gancho_s))
+        except Exception:
+            pass
     w, h = FORMATOS[formato]
     fc = f"[0:v]scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h}[v]"
     cmd = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",

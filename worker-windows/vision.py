@@ -120,6 +120,64 @@ def detectar_rostros(path, segundo=None):
     except Exception as e:
         return {"disponible": False, "rostros": None, "nota": f"detectar_rostros falló: {e}"}
 
+def ubicar_rostro(path, segundo=None):
+    """La caja del rostro MÁS GRANDE en un frame (para el zoom a la
+    cara de clipper, v1.3.20). Mismos backends que detectar_rostros
+    (Haar en cv2 4.x, YuNet en cv2 5.x). Devuelve
+    {disponible, rostro: (x, y, ancho, alto) | None, ancho, alto, nota}
+    en píxeles del frame extraído (resolución original del video).
+    Sin opencv o sin rostro: disponible/rostro en False/None con el
+    motivo; el llamador sigue con el encuadre centrado de siempre."""
+    try:
+        import cv2
+    except Exception as e:
+        return {"disponible": False, "rostro": None, "ancho": 0, "alto": 0,
+                "nota": f"opencv no está instalado en este trabajador ({e})."}
+    try:
+        if segundo is None:
+            segundo = max(0.0, _duracion(path) / 2.0)
+        with tempfile.TemporaryDirectory() as td:
+            frame = str(Path(td) / "frame.jpg")
+            r = subprocess.run(["ffmpeg", "-y", "-v", "error", "-ss", str(segundo), "-i", str(path),
+                                "-frames:v", "1", frame], capture_output=True, text=True, timeout=120, creationflags=SIN_VENTANA)
+            if r.returncode != 0 or not Path(frame).exists():
+                r = subprocess.run(["ffmpeg", "-y", "-v", "error", "-i", str(path),
+                                    "-frames:v", "1", frame], capture_output=True, text=True, timeout=120, creationflags=SIN_VENTANA)
+            if r.returncode != 0 or not Path(frame).exists():
+                return {"disponible": False, "rostro": None, "ancho": 0, "alto": 0,
+                        "nota": "No se pudo extraer el frame con FFmpeg."}
+            img = cv2.imread(frame)
+            if img is None:
+                return {"disponible": False, "rostro": None, "ancho": 0, "alto": 0,
+                        "nota": "Frame extraído ilegible para cv2."}
+            alto, ancho = img.shape[:2]
+            cajas = []
+            if hasattr(cv2, "CascadeClassifier"):
+                cascada_path = str(Path(cv2.data.haarcascades) / "haarcascade_frontalface_default.xml")
+                if Path(cascada_path).exists():
+                    cascada = cv2.CascadeClassifier(cascada_path)
+                    if not cascada.empty():
+                        gris = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+                        cajas = [tuple(int(v) for v in c) for c in
+                                 cascada.detectMultiScale(gris, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))]
+            if not cajas and hasattr(cv2, "FaceDetectorYN_create"):
+                modelo = _asegurar_modelo_yunet()
+                if modelo is not None:
+                    det = cv2.FaceDetectorYN_create(str(modelo), "", (ancho, alto), 0.7, 0.3, 5000)
+                    _n, caras = det.detect(img)
+                    if caras is not None:
+                        cajas = [(int(c[0]), int(c[1]), int(c[2]), int(c[3])) for c in caras]
+            if not cajas:
+                return {"disponible": True, "rostro": None, "ancho": int(ancho), "alto": int(alto),
+                        "nota": f"Sin rostros detectables en el frame de {segundo:.1f} s."}
+            mayor = max(cajas, key=lambda c: c[2] * c[3])
+            return {"disponible": True, "rostro": mayor, "ancho": int(ancho), "alto": int(alto),
+                    "nota": f"Rostro mayor {mayor} en el frame de {segundo:.1f} s."}
+    except Exception as e:
+        return {"disponible": False, "rostro": None, "ancho": 0, "alto": 0,
+                "nota": f"ubicar_rostro falló: {e}"}
+
+
 def conteo_movimiento(path, fps=2, ancho=64, alto=36):
     """Movimiento SIN opencv: decodifica a gris crudo 64x36 con FFmpeg y promedia
     la diferencia absoluta entre frames consecutivos (0 = imagen estática)."""

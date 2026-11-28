@@ -1,11 +1,11 @@
 {
   "files": {
     "actualizador.py": "020bce83d887c4005a86a094f4c84e30ad593ea2c0ab58b0fa4389efab77e4d4",
-    "analyzer.py": "a5765240eb09ab568042c9311b1c67d9c7c3c79c679b64a2629cc59c2fd2b7f9",
+    "analyzer.py": "c23fa28876a75de52e90eabc183cc8dd6fbe5bd6721acbc7c6a598787b32558a",
     "biblioteca_recursos.py": "1b2e25a140f5a558818a527d8d0c773cf0e74cabf2169da8b8e1874b53f0aa50",
     "buffer.py": "fb22bef60145e831dcbd73a91f3063c0b0a0b99c867e295b3374c7bf64383e7d",
     "capas_recursos.py": "354d17fac4ed7993e35638e98a72664ff54734076fcf50ed6a188720a952672e",
-    "clipper.py": "42f157a863e94152f2bb916837d4b0ce3638cb70478a8eeb34d90d5374fb5c18",
+    "clipper.py": "0b2d441b3696a817fa6ab89823f51de1ac6783e29027aaec697868615986f921",
     "dedup.py": "5844ec67aa90de00baa151525a26e030ea3e033b7f7297a74634ea73ec63536b",
     "descargar_recursos.py": "0ea538f93512e58204a0e4e38170ff01c5e899f84c2fa1bc58ef90124515bab9",
     "editor.py": "3706834e83f548c57666107fe6057afa0d36aa76dc0e11b1f956c2f7cabdcacd",
@@ -15,7 +15,7 @@
     "instancia.py": "c5f46b46a3f8b29974938b1d6fa21cb42090d4ffd2db9dd95bdee00a55bc117e",
     "ollama_local.py": "c7387d5982fad9312f83c3ec9cb9d44687ad233b8c3c41c8171cdf0216da7fe1",
     "procesos.py": "ffb78f877a2dc6ebe74be62d979634b9cac3d044dde548ab305b331ce50385e6",
-    "radar.py": "181a24847394f894025be02ea3f822cea5b5c5693ceaf833fabb3372a4aca7c8",
+    "radar.py": "d76493cfbaf3bca2a1796f3b51a56c15e2341d2ed31047a79c28af1625771a26",
     "recorder.py": "170d400832849d2d5508f6fa6840e9407b437fbfdf96790833c142b406a29273",
     "requirements.txt": "ac30d731b1cc532e45a2df0ba9c065375592e66de867fbc6ea6c0c67fefca940",
     "resolver.py": "c82f43585cde09e075c758908a1fb0832b611ae13ae98ddd6a50cae50f3c1578",
@@ -25,8 +25,8 @@
     "titles.py": "dd7c4f1e8d25ce7bb81480212f0cd633a4ac3ef9a019fcda2178f49515b80b2d",
     "transcribe.py": "f2f43819d34833ec1a4f538a02944f5735b03c6a00828ee2d6228216d73167d0",
     "viral.py": "934b4f4e8fd48109eda30cb49ea775d9236603bcdca87aa5fbe5a2ff27be1340",
-    "vision.py": "8565812e246752d9feaf09a308fa4ffae96bf3d3750ca52a4ffd53e9121817e6",
-    "worker.py": "f841eb9360948ec9df2ef9281a55dfa54b1f8b991227054dddd18dff7a363aec"
+    "vision.py": "6d48f827c2750ad1e4aa013004642dfac6378ac28907f5b6d6e5aae0914652e6",
+    "worker.py": "e1426d38c4d9e760259279d37ed256866dd697bd157a7dc680bb52af0a210dfe"
   },
-  "version": "1.3.19"
+  "version": "1.3.20"
 }

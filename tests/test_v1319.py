@@ -68,8 +68,8 @@ def test_reload_y_luego_error_definitivo_corta(monkeypatch):
 
 
 def test_version_1_3_19_y_manifiesto():
-    assert worker_mod.VERSION == "1.3.19"
+    assert worker_mod.VERSION == "1.3.20"
     manifiesto = json.loads((ROOT / "worker-windows" / "manifest.json")
                             .read_text(encoding="utf-8"))
-    assert manifiesto["version"] == "1.3.19"
+    assert manifiesto["version"] == "1.3.20"
     assert "resolver.py" in manifiesto["files"]
