@@ -418,13 +418,6 @@ def test_radar_en_vivo_e2e(tmp_path):
         assert "clips" in res2["nota"]
         carpeta_sesion = Path(cfg["carpeta_grabaciones"]) / f"sesion-{sid}"
         assert not (carpeta_sesion / "grabacion_completa.mp4").exists()
-        # Desde la v1.3.21 el descarte corre en segundo plano, tras la
-        # pasada final del radar (que puede generar un último clip):
-        # se espera a que la limpieza aterrice.
-        for _ in range(180):
-            if list(carpeta_sesion.glob("seg_*.mp4")) == []:
-                break
-            time.sleep(0.5)
         assert list(carpeta_sesion.glob("seg_*.mp4")) == [], \
             "al detener el en vivo quedaron segmentos en la carpeta de la sesión"
         r = client.post(f"/jobs/{job['id']}/complete", json={"result": res2}, headers=wh)

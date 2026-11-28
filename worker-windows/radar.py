@@ -153,8 +153,7 @@ class RadarSesion:
             salida.parent.mkdir(parents=True, exist_ok=True)
             if salida.exists():
                 salida = salida.with_name(f"clip-radar-{int(ventana['start_s'])}s-{int(time.time())}.mp4")
-            exportar_clip(str(unido), max(0.0, ini - base), fin - base, salida, "9:16",
-                          pico_s=max(0.0, float(ventana["start_s"]) - base))
+            exportar_clip(str(unido), max(0.0, ini - base), fin - base, salida, "9:16")
             if not clip_tiene_video(salida):
                 raise RuntimeError("El clip del radar quedó sin video.")
             thumb = miniatura(salida, 1, salida.with_suffix(".jpg"))

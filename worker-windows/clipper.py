@@ -64,69 +64,44 @@ def _datos_fuente(fuente):
     return ancho, alto, audio
 
 
-ZOOM_GANCHO = 0.62   # acercamiento del gancho sobre la cara/el centro
+def _filtro_encuadre(fuente, inicio_s, fin_s, formato):
+    """Filtro de encuadre ENFOCADO EN LA GENTE (v1.3.22, único cambio
+    que Jose pidió sobre la 1.3.19: «solo trata de enfocar la gente
+    mejor»). Se busca una cara en tres instantes de la ventana y, si
+    aparece, la ventana vertical se centra en ella en vez del centro
+    del cuadro (que cortaba a la gente de los lados). Sin cara o ante
+    cualquier fallo: None y el llamador usa el filtro clásico."""
+    try:
+        import vision
+        w, h = FORMATOS[formato]
+        src_w, src_h, _audio = _datos_fuente(fuente)
+        if not src_w or not src_h:
+            return None
+        dur = float(fin_s) - float(inicio_s)
+        mejor = None
+        for frac in (0.35, 0.5, 0.65):
+            ub = vision.ubicar_rostro(fuente, segundo=float(inicio_s) + dur * frac)
+            if ub.get("disponible") and ub.get("rostro"):
+                x, y, rw, rh = ub["rostro"]
+                if mejor is None or rw * rh > mejor[2] * mejor[3]:
+                    mejor = (x, y, rw, rh)
+        if mejor is None:
+            return None
+        x, y, rw, rh = mejor
+        cw, ch, cx, cy = _ventana_crop(src_w, src_h, w, h,
+                                       (x + rw / 2, y + rh / 2), 1.0)
+        return f"[0:v]crop={cw}:{ch}:{cx}:{cy},scale={w}:{h},setsar=1[v]"
+    except Exception:
+        return None
 
 
-def _exportar_con_gancho(fuente, inicio_s, fin_s, salida, formato, pico_s, gancho_s):
-    """Exportación con GANCHO + ZOOM A LA CARA (v1.3.20, pedido de Jose
-    el 2026-11-28: «que los videos sean más duros y más virales»):
-    el clip abre con los «gancho_s» segundos del momento pico (con un
-    zoom fuerte a la cara detectada en ese instante) y luego corre el
-    clip completo con el encuadre centrado en esa misma cara (o el
-    centro de siempre si no se detecta rostro). Una sola corrida de
-    FFmpeg con las dos entradas y concat. Cualquier fallo burla esta
-    vía y el llamador cae a la exportación clásica."""
-    import vision
-    w, h = FORMATOS[formato]
-    src_w, src_h, hay_audio = _datos_fuente(fuente)
-    if not src_w or not src_h:
-        raise RuntimeError("Sin dimensiones de la fuente para el gancho.")
-    centro = None
-    ub = vision.ubicar_rostro(fuente, segundo=pico_s)
-    if ub.get("disponible") and ub.get("rostro"):
-        x, y, rw, rh = ub["rostro"]
-        centro = (x + rw / 2, y + rh / 2)
-    bw, bh, bx, by = _ventana_crop(src_w, src_h, w, h, centro, 1.0)
-    hw, hh, hx, hy = _ventana_crop(src_w, src_h, w, h, centro, ZOOM_GANCHO)
-    g_ini = min(max(float(pico_s) - 0.4, float(inicio_s)), max(float(inicio_s), float(fin_s) - gancho_s))
-    g_fin = g_ini + gancho_s
-    # setsar=1: las dos ventanas tienen proporciones casi idénticas
-    # pero no exactas; sin normalizar el SAR, concat rechaza la mezcla.
-    fc = (f"[0:v]crop={hw}:{hh}:{hx}:{hy},scale={w}:{h},setsar=1[v0];"
-          f"[1:v]crop={bw}:{bh}:{bx}:{by},scale={w}:{h},setsar=1[v1];")
-    if hay_audio:
-        fc += "[v0][0:a][v1][1:a]concat=n=2:v=1:a=1[v][a]"
-        mapas = ["-map", "[v]", "-map", "[a]"]
-    else:
-        fc += "[v0][v1]concat=n=2:v=1:a=0[v]"
-        mapas = ["-map", "[v]"]
-    cmd = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
-           "-ss", str(g_ini), "-to", str(g_fin), "-i", str(fuente),
-           "-ss", str(inicio_s), "-to", str(fin_s), "-i", str(fuente),
-           "-filter_complex", fc, *mapas,
-           "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p",
-           "-c:a", "aac", "-ar", "48000", "-shortest", str(salida)]
-    r = subprocess.run(cmd, capture_output=True, text=True, timeout=3600, creationflags=SIN_VENTANA)
-    if r.returncode != 0 or not Path(salida).exists():
-        raise RuntimeError(f"FFmpeg con gancho falló: {r.stderr[-400:]}")
-    return str(salida)
-
-
-def exportar_clip(fuente, inicio_s, fin_s, salida, formato="9:16", subtitulos=False, srt=None,
-                  pico_s=None, gancho_s=2.2):
+def exportar_clip(fuente, inicio_s, fin_s, salida, formato="9:16", subtitulos=False, srt=None):
     if fin_s <= inicio_s: raise ValueError("fin debe ser mayor que inicio")
     # subtitulos/srt se ignoran a propósito: no quemar SRT/ASS/VTT.
     _ = (subtitulos, srt)
-    # Gancho + zoom (v1.3.20): solo si el llamador marca el pico y la
-    # ventana da para ello; si la vía nueva falla, se cae a la clásica.
-    if pico_s is not None and (fin_s - inicio_s) >= 10.0:
-        try:
-            return _exportar_con_gancho(fuente, inicio_s, fin_s, salida, formato,
-                                        float(pico_s), float(gancho_s))
-        except Exception:
-            pass
     w, h = FORMATOS[formato]
-    fc = f"[0:v]scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h}[v]"
+    fc = _filtro_encuadre(fuente, inicio_s, fin_s, formato) or \
+        f"[0:v]scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h}[v]"
     cmd = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
            "-ss", str(inicio_s), "-to", str(fin_s), "-i", str(fuente),
            "-filter_complex", fc, "-map", "[v]", "-map", "0:a:0?",

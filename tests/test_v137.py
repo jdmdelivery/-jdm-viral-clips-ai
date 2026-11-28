@@ -71,6 +71,6 @@ def test_desplegable_duraciones_nuevas_en_vista_restaurada():
 # 3/4. Versión visible 1.3.8
 # ---------------------------------------------------------------------------
 def test_version_visible_1_3_8():
-    assert worker_mod.VERSION == "1.3.21"
+    assert worker_mod.VERSION == "1.3.22"
     manifiesto = json.loads((ROOT / "worker-windows" / "manifest.json").read_text(encoding="utf-8"))
-    assert manifiesto["version"] == "1.3.21"
+    assert manifiesto["version"] == "1.3.22"

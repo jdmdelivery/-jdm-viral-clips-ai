@@ -261,13 +261,6 @@ def test_detener_en_vivo_no_deja_pelicula_ni_segmentos(tmp_path):
     assert res["grabacion_completa"] is None
     assert "clips" in res["nota"]
     assert not (carpeta / "grabacion_completa.mp4").exists()
-    # Desde la v1.3.21 el descarte corre en segundo plano (tras el
-    # cierre del radar): se espera a que la limpieza aterrice.
-    import time as _t
-    for _ in range(100):
-        if list(carpeta.glob("seg_*.mp4")) == [] and rec.buffer.segmentos() == []:
-            break
-        _t.sleep(0.1)
     assert list(carpeta.glob("seg_*.mp4")) == [], "quedaron segmentos de la grabación en vivo"
     assert rec.buffer.segmentos() == []
     assert clip.exists() and clip.read_bytes() == b"clip-guardado"
@@ -277,8 +270,8 @@ def test_detener_en_vivo_no_deja_pelicula_ni_segmentos(tmp_path):
 # 4. Versión visible 1.3.11 y ventana definida en un solo sitio
 # ---------------------------------------------------------------------------
 def test_version_1_3_11_y_ventana():
-    assert worker_mod.VERSION == "1.3.21"
+    assert worker_mod.VERSION == "1.3.22"
     manifiesto = json.loads((Path(__file__).resolve().parents[1]
                              / "worker-windows" / "manifest.json").read_text(encoding="utf-8"))
-    assert manifiesto["version"] == "1.3.21"
+    assert manifiesto["version"] == "1.3.22"
     assert VENTANA_PODA_S == 45 * 60

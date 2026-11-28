@@ -76,7 +76,7 @@ def analizar_video(fuente, outdir, modo="general", pre_s=30, post_s=25,
         salida.parent.mkdir(exist_ok=True)
         if salida.exists():
             salida = salida.with_name(f"clip-evento-{ev['_segmento']}-{int(time.time())}.mp4")
-        exportar_clip(fuente, ini, fin, salida, "9:16", pico_s=float(ev["start_s"]))
+        exportar_clip(fuente, ini, fin, salida, "9:16")
         thumb = miniatura(salida, 1, salida.with_suffix(".jpg"))
         texto_tr = None
         if con_transcripcion:
