@@ -311,9 +311,9 @@ def test_resolver_sin_gancho_comportamiento_1313(monkeypatch):
 
 def test_version_1_3_14_y_modulo_en_manifiesto():
     import worker as worker_mod
-    assert worker_mod.VERSION == "1.3.16"
+    assert worker_mod.VERSION == "1.3.17"
     manifiesto = json.loads((Path(__file__).resolve().parents[1]
                              / "worker-windows" / "manifest.json")
                             .read_text(encoding="utf-8"))
-    assert manifiesto["version"] == "1.3.16"
+    assert manifiesto["version"] == "1.3.17"
     assert "sesion_youtube.py" in manifiesto["files"]

@@ -159,26 +159,33 @@ def _cmd_grabar(fuente, outdir, start_number=0, en_vivo=False):
     # sola URL el comando es el histórico.
     entradas = [l.strip() for l in str(fuente).splitlines() if l.strip()]
     if not entradas: entradas = [str(fuente)]
-    # Sincronía audio/video (v1.3.15): con DOS señales en vivo (video y
-    # audio por separado, el par «bv*+ba» del resolver) cada una trae su
-    # propio reloj y FFmpeg las unía como si arrancaran a la vez: la voz
-    # se iba quedando detrás del video, peor a más horas de sesión. Con
-    # «use_wallclock_as_timestamps» ambas entradas se sellan con el
-    # MISMO reloj (el de llegada) y nacen alineadas. Solo en vivo y solo
-    # con dos entradas: una señal combinada ya trae sus marcas correctas
-    # y en un archivo el reloj de pared corrompería sus tiempos.
-    alinear_reloj = en_vivo and len(entradas) > 1
+    # Sincronía audio/video con DOS señales en vivo (el par «bv*+ba» del
+    # resolver): cada una trae su propio reloj y la voz se iba quedando
+    # detrás del video, peor a más horas de sesión.
+    #
+    # v1.3.15 lo intentó con «use_wallclock_as_timestamps» (sellar cada
+    # paquete con la hora de LLEGADA) y salió mal: las señales en vivo
+    # llegan por pedazos, los paquetes de un pedazo comparten casi la
+    # misma hora y la imagen resultante SE CONGELA a tramos mientras el
+    # audio sigue (visto por Jose en una grabación real el 2026-11-27).
+    # v1.3.17 lo retira y usa el mecanismo seguro: los tiempos propios
+    # de cada señal NO se tocan (la imagen jamás se congela por esto) y
+    # el AUDIO se ajusta con «aresample=async=1», que estira o encoge el
+    # audio de forma imperceptible (muestras por segundo) para que siga
+    # el reloj del video durante horas. La rotación de captura cada
+    # MAX_CAPTURA_CONTINUA_S (v1.3.15) se queda: acota lo que cualquier
+    # desfase residual pueda acumular. Solo en vivo y con dos entradas:
+    # una señal combinada ya trae audio y video en un solo reloj.
+    dos_senales_vivo = en_vivo and len(entradas) > 1
     for entrada in entradas:
         if en_vivo: cmd += ["-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5"]
-        if alinear_reloj: cmd += ["-use_wallclock_as_timestamps", "1"]
         cmd += ["-i", entrada]
     cmd += ["-map", "0:v:0?", "-map", f"{len(entradas) - 1}:a:0?",
             "-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2",
             "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p", "-sc_threshold", "0",
-            "-force_key_frames", f"expr:gte(t,n_forced*{SEG})",
-            "-c:a", "aac", "-ar", "48000"]
-    if alinear_reloj: cmd += ["-start_at_zero"]
-    cmd += [
+            "-force_key_frames", f"expr:gte(t,n_forced*{SEG})"]
+    if dos_senales_vivo: cmd += ["-af", "aresample=async=1"]
+    cmd += ["-c:a", "aac", "-ar", "48000",
             "-f", "segment", "-segment_time", str(SEG), "-reset_timestamps", "1",
             "-segment_start_number", str(start_number),
             str(Path(outdir) / "seg_%05d.mp4")]

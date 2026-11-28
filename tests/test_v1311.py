@@ -270,8 +270,8 @@ def test_detener_en_vivo_no_deja_pelicula_ni_segmentos(tmp_path):
 # 4. Versión visible 1.3.11 y ventana definida en un solo sitio
 # ---------------------------------------------------------------------------
 def test_version_1_3_11_y_ventana():
-    assert worker_mod.VERSION == "1.3.16"
+    assert worker_mod.VERSION == "1.3.17"
     manifiesto = json.loads((Path(__file__).resolve().parents[1]
                              / "worker-windows" / "manifest.json").read_text(encoding="utf-8"))
-    assert manifiesto["version"] == "1.3.16"
+    assert manifiesto["version"] == "1.3.17"
     assert VENTANA_PODA_S == 45 * 60

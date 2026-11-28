@@ -7,9 +7,10 @@ reloj, y las une como si arrancaran a la vez; el desfase crece con las
 horas de sesión.
 
 La corrección, en dos piezas:
-1. `_cmd_grabar` sella ambas entradas con el mismo reloj de pared
-   («use_wallclock_as_timestamps») y la salida arranca en cero
-   («start_at_zero») — solo en vivo y solo con dos entradas.
+1. `_cmd_grabar` alinea las dos entradas (en la v1.3.17: SIN tocar los
+   tiempos del video — el «use_wallclock_as_timestamps» de la primera
+   versión congelaba la imagen en grabaciones reales y se retiró; el
+   ajuste lo hace el audio con «aresample=async=1», ver test_v1317.py).
 2. El bucle del Recorder rota la captura cada MAX_CAPTURA_CONTINUA_S:
    reinicia FFmpeg con señal fresca SIN gastar reintentos, para que
    ningún desfase residual se acumule durante horas.
@@ -26,24 +27,23 @@ UNA = "https://v.example.com/live.m3u8"
 
 
 def test_dos_entradas_en_vivo_se_alinean_por_reloj_de_pared():
+    # HISTÓRICO (v1.3.17): esta prueba fijaba el «use_wallclock» de la
+    # v1.3.15; esa bandera congeló la imagen en una grabación real y se
+    # retiró. El comportamiento vigente lo fija test_v1317.py; aquí se
+    # conserva el mapeo histórico de entradas, que no cambió.
     cmd = _cmd_grabar(DOS, "salida", en_vivo=True)
-    assert cmd.count("-use_wallclock_as_timestamps") == 2
-    # La bandera va pegada a CADA «-i»: es una opción de entrada.
-    for i, tok in enumerate(cmd):
-        if tok == "-i":
-            assert cmd[i - 2:i] == ["-use_wallclock_as_timestamps", "1"]
-    assert "-start_at_zero" in cmd
-    # El mapeo histórico no cambia: video de la 1ª, audio de la última.
+    assert cmd.count("-i") == 2
     i = cmd.index("-map")
     assert cmd[i:i + 4] == ["-map", "0:v:0?", "-map", "1:a:0?"]
 
 
 def test_dos_entradas_sin_vivo_no_tocan_los_relojes():
-    # Un archivo publicado con formatos separados debe conservar las
-    # marcas propias de cada pista: el reloj de pared las corrompería.
+    # Un archivo publicado con formatos separados conserva las marcas
+    # propias de cada pista y tampoco lleva el ajuste de audio en vivo.
     cmd = _cmd_grabar(DOS, "salida")
     assert "-use_wallclock_as_timestamps" not in cmd
     assert "-start_at_zero" not in cmd
+    assert "aresample=async=1" not in cmd
 
 
 def test_una_sola_entrada_en_vivo_como_siempre():
@@ -52,6 +52,7 @@ def test_una_sola_entrada_en_vivo_como_siempre():
     assert cmd.count("-i") == 1
     assert "-use_wallclock_as_timestamps" not in cmd
     assert "-start_at_zero" not in cmd
+    assert "aresample=async=1" not in cmd
 
 
 class _ProcFalso:
@@ -98,15 +99,17 @@ def test_rotacion_reinicia_sin_gastar_reintentos(tmp_path, monkeypatch):
     # La numeración de segmentos continúa donde iba (no pisa el seg_00000).
     i = cmds[1].index("-segment_start_number")
     assert cmds[1][i + 1] == "1"
-    # Y la captura rotada también nace alineada por reloj de pared.
-    assert cmds[0].count("-use_wallclock_as_timestamps") == 2
-    assert cmds[1].count("-use_wallclock_as_timestamps") == 2
+    # Y la captura rotada usa el mismo comando seguro de sincronía
+    # (v1.3.17: ajuste por audio, jamás reloj de pared).
+    for cmd in cmds:
+        assert "-use_wallclock_as_timestamps" not in cmd
+        assert "aresample=async=1" in cmd
 
 
 def test_version_1_3_15_y_recorder_en_manifiesto():
-    assert worker_mod.VERSION == "1.3.16"
+    assert worker_mod.VERSION == "1.3.17"
     manifiesto = json.loads((Path(__file__).resolve().parents[1]
                              / "worker-windows" / "manifest.json")
                             .read_text(encoding="utf-8"))
-    assert manifiesto["version"] == "1.3.16"
+    assert manifiesto["version"] == "1.3.17"
     assert "recorder.py" in manifiesto["files"]

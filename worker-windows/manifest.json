@@ -16,7 +16,7 @@
     "ollama_local.py": "c7387d5982fad9312f83c3ec9cb9d44687ad233b8c3c41c8171cdf0216da7fe1",
     "procesos.py": "ffb78f877a2dc6ebe74be62d979634b9cac3d044dde548ab305b331ce50385e6",
     "radar.py": "181a24847394f894025be02ea3f822cea5b5c5693ceaf833fabb3372a4aca7c8",
-    "recorder.py": "b546875075e0b8475d16e91af4b83b6f9556ef025a4fd31f1735155b20d4a70b",
+    "recorder.py": "ca98d824ec4c39fe9d9997d84c07a127748e45735597d3fb972fee4fbaf7ead0",
     "requirements.txt": "ac30d731b1cc532e45a2df0ba9c065375592e66de867fbc6ea6c0c67fefca940",
     "resolver.py": "f6f9c951c6f2e0bffa1c0c23e5c20d2a447901a9f2a185e01726a4fc6772444a",
     "sesion_youtube.py": "c5b91fa82ac0b960d23a28ca965a67e07578d73a73d51f03e30ad856f6d9bfab",
@@ -26,7 +26,7 @@
     "transcribe.py": "f2f43819d34833ec1a4f538a02944f5735b03c6a00828ee2d6228216d73167d0",
     "viral.py": "934b4f4e8fd48109eda30cb49ea775d9236603bcdca87aa5fbe5a2ff27be1340",
     "vision.py": "8565812e246752d9feaf09a308fa4ffae96bf3d3750ca52a4ffd53e9121817e6",
-    "worker.py": "d0cfbcf38aaf4cb7259f25c0540d65ba36f6b86dba42c5f63b35b862b5ae6e46"
+    "worker.py": "9b78785f56c25544b7d73a08bd571d516c59cb8cb18f933357b69a2726b1c4cb"
   },
-  "version": "1.3.16"
+  "version": "1.3.17"
 }
