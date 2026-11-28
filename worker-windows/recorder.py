@@ -151,7 +151,60 @@ def duracion_real(path):
     except Exception:
         return float(SEG)
 
-def _cmd_grabar(fuente, outdir, start_number=0, en_vivo=False):
+def _sondear_inicio(url, timeout=15):
+    """Marca de tiempo de arranque de una señal (ffprobe, start_time).
+
+    Las dos señales separadas de una plataforma en vivo comparten UNA
+    línea de tiempo (la del directo): la diferencia entre sus marcas de
+    arranque ES el corrimiento con el que nacen desalineadas. Devuelve
+    None si no se pudo medir (sin red, URL muerta, salida ilegible):
+    ante la duda no se compensa nada.
+    """
+    cmd = ["ffprobe", "-v", "error"]
+    if str(url).startswith("http"):
+        cmd += ["-rw_timeout", str(int(timeout * 1_000_000))]
+    cmd += ["-show_entries", "stream=start_time", "-of", "csv=p=0", str(url)]
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True,
+                           timeout=timeout + 5, creationflags=SIN_VENTANA)
+    except Exception:
+        return None
+    for linea in (r.stdout or "").splitlines():
+        try:
+            return float(linea.strip().split(",")[0])
+        except (ValueError, IndexError):
+            continue
+    return None
+
+
+UMBRAL_DESFASE_S = 0.25   # por debajo, el corrimiento es inaudible
+MAX_DESFASE_S = 8.0       # por encima, la medición no es de fiar
+
+
+def _desfase_entre(inicio_video, inicio_audio):
+    """Compensación de nacimiento entre las dos señales (v1.3.18).
+
+    Jose lo describió el 2026-11-27: «primero habla y después a los dos
+    segundos se escucha lo que dijo» — la voz ~2 s tarde, FIJO desde el
+    primer segundo: las dos señales se pegaban cada una desde su cero
+    sin mirar la línea de tiempo común. Con las marcas de arranque
+    medidas, la señal que va ADELANTADA en contenido (la de MAYOR
+    marca: en su cero ya muestra un momento más nuevo) se retrasa con
+    «-itsoffset» la diferencia, y ambas nacen alineadas. Devuelve
+    (índice_de_entrada, segundos) o None si no hay nada que corregir
+    (sin medición, corrimiento inaudible o medición absurda).
+    """
+    if inicio_video is None or inicio_audio is None:
+        return None
+    d = float(inicio_video) - float(inicio_audio)
+    if abs(d) < UMBRAL_DESFASE_S or abs(d) > MAX_DESFASE_S:
+        return None
+    if d > 0:
+        return (0, round(d, 3))
+    return (1, round(-d, 3))
+
+
+def _cmd_grabar(fuente, outdir, start_number=0, en_vivo=False, desfase=None):
     cmd = ["ffmpeg", "-hide_banner", "-loglevel", "warning"]
     # La fuente puede traer DOS URLs unidas por salto de línea (video y
     # audio por separado, desde resolver.py): cada una es una entrada de
@@ -177,7 +230,9 @@ def _cmd_grabar(fuente, outdir, start_number=0, en_vivo=False):
     # desfase residual pueda acumular. Solo en vivo y con dos entradas:
     # una señal combinada ya trae audio y video en un solo reloj.
     dos_senales_vivo = en_vivo and len(entradas) > 1
-    for entrada in entradas:
+    for i, entrada in enumerate(entradas):
+        if desfase and desfase[0] == i:
+            cmd += ["-itsoffset", f"{desfase[1]:.3f}"]
         if en_vivo: cmd += ["-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5"]
         cmd += ["-i", entrada]
     cmd += ["-map", "0:v:0?", "-map", f"{len(entradas) - 1}:a:0?",
@@ -366,7 +421,23 @@ class Recorder:
         start_number = 0
         while not self.detener_flag.is_set():
             log = open(self.outdir / "ffmpeg.log", "ab")
-            self.proc = subprocess.Popen(_cmd_grabar(self.fuente, self.outdir, start_number, self.en_vivo),
+            # Compensación de nacimiento (v1.3.18): con dos señales en
+            # vivo se mide la marca de arranque de cada una y se retrasa
+            # la adelantada (ver _desfase_entre). Se mide en CADA
+            # lanzamiento: reconexión y rotación traen URLs frescas y el
+            # corrimiento puede cambiar con ellas. Si la medición falla,
+            # desfase=None y la grabación sigue como siempre.
+            desfase = None
+            if self.en_vivo:
+                entradas = [l.strip() for l in str(self.fuente).splitlines() if l.strip()]
+                if len(entradas) > 1:
+                    desfase = _desfase_entre(_sondear_inicio(entradas[0]),
+                                             _sondear_inicio(entradas[-1]))
+                    if desfase:
+                        print(f"Grabación: desfase entre señales de {desfase[1]:.2f} s; "
+                              f"se retrasa la entrada {desfase[0]} para alinear audio y video.")
+            self.proc = subprocess.Popen(_cmd_grabar(self.fuente, self.outdir, start_number, self.en_vivo,
+                                                     desfase=desfase),
                                          stdout=subprocess.DEVNULL, stderr=log, creationflags=SIN_VENTANA)
             self._anotar_pid()
             self._log_fh = log

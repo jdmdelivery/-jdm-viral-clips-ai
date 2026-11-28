@@ -90,6 +90,9 @@ def test_rotacion_reinicia_sin_gastar_reintentos(tmp_path, monkeypatch):
         return procs[len(cmds) - 1]
 
     monkeypatch.setattr(recorder.subprocess, "Popen", popen_falso)
+    # El sondeo de desfase (v1.3.18) usa subprocess.run → Popen: se
+    # anula aquí porque esta prueba es de la rotación, no del sondeo.
+    monkeypatch.setattr(recorder, "_sondear_inicio", lambda url, timeout=15: None)
     r._bucle()
 
     # Dos FFmpeg: el inicial y el de la rotación. La rotación NO es una
@@ -107,9 +110,9 @@ def test_rotacion_reinicia_sin_gastar_reintentos(tmp_path, monkeypatch):
 
 
 def test_version_1_3_15_y_recorder_en_manifiesto():
-    assert worker_mod.VERSION == "1.3.17"
+    assert worker_mod.VERSION == "1.3.18"
     manifiesto = json.loads((Path(__file__).resolve().parents[1]
                              / "worker-windows" / "manifest.json")
                             .read_text(encoding="utf-8"))
-    assert manifiesto["version"] == "1.3.17"
+    assert manifiesto["version"] == "1.3.18"
     assert "recorder.py" in manifiesto["files"]

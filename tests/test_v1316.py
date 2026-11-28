@@ -203,9 +203,9 @@ def test_panel_ofrece_modo_epicos_y_titulos_nuevos():
 
 
 def test_version_1_3_16_y_manifiesto():
-    assert worker_mod.VERSION == "1.3.17"
+    assert worker_mod.VERSION == "1.3.18"
     manifiesto = json.loads((ROOT / "worker-windows" / "manifest.json")
                             .read_text(encoding="utf-8"))
-    assert manifiesto["version"] == "1.3.17"
+    assert manifiesto["version"] == "1.3.18"
     for nombre in ("viral.py", "vision.py", "radar.py", "analyzer.py"):
         assert nombre in manifiesto["files"]
