@@ -110,9 +110,9 @@ def test_rotacion_reinicia_sin_gastar_reintentos(tmp_path, monkeypatch):
 
 
 def test_version_1_3_15_y_recorder_en_manifiesto():
-    assert worker_mod.VERSION == "1.3.18"
+    assert worker_mod.VERSION == "1.3.19"
     manifiesto = json.loads((Path(__file__).resolve().parents[1]
                              / "worker-windows" / "manifest.json")
                             .read_text(encoding="utf-8"))
-    assert manifiesto["version"] == "1.3.18"
+    assert manifiesto["version"] == "1.3.19"
     assert "recorder.py" in manifiesto["files"]

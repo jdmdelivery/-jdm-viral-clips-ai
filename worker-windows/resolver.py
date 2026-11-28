@@ -11,7 +11,7 @@ Errores honestos y específicos: si el en vivo todavía no comienza, es
 privado/no disponible o la plataforma no entrega la señal, se lanza
 ErrorResolucion con el motivo en español y el trabajo falla con ese
 mensaje. NUNCA se finge una grabación que no existe."""
-import os, subprocess, sys
+import os, subprocess, sys, time
 from procesos import SIN_VENTANA
 from pathlib import Path
 from urllib.parse import urlparse
@@ -89,6 +89,13 @@ def _ejecutar_ytdlp(url, extra=()):
 _PATRONES_LOGIN = ("sign in to confirm", "please sign in", "sign in to",
                    "login required", "log in to", "not a bot",
                    "use --cookies", "cookies-from-browser")
+# Errores TRANSITORIOS de página (v1.3.19): «The page needs to be
+# reloaded» significa que la página del video llegó incompleta en ESE
+# intento; los demás clientes (que no leen esa página) suelen entregar
+# la señal. Antes este error se trataba como definitivo y abortaba
+# toda la cadena en el primer intento: el 2026-11-27 dejó a Jose sin
+# poder grabar un en vivo válido por este motivo.
+_PATRONES_TRANSITORIOS = ("needs to be reloaded",)
 _PATRONES_COOKIES_FALLIDAS = ("could not copy", "failed to decrypt",
                               "unable to load cookies", "no cookies",
                               "could not find", "cookies database",
@@ -97,6 +104,11 @@ _PATRONES_COOKIES_FALLIDAS = ("could not copy", "failed to decrypt",
 def _es_error_login(stderr):
     baja = (stderr or "").lower()
     return any(p in baja for p in _PATRONES_LOGIN)
+
+
+def _es_error_transitorio(stderr):
+    baja = (stderr or "").lower()
+    return any(p in baja for p in _PATRONES_TRANSITORIOS)
 
 def _es_error_cookies(stderr):
     baja = (stderr or "").lower()
@@ -208,6 +220,7 @@ def _resolver_con_cadena(url):
     probados = []
     ultimo_error = ""
     hubo_login = False
+    hubo_transitorio = False
     for descripcion, extra in intentos:
         es_intento_cookies = "--cookies-from-browser" in extra or "--cookies" in extra
         try:
@@ -232,11 +245,14 @@ def _resolver_con_cadena(url):
             raise ErrorResolucion("yt-dlp no está instalado en esta PC: vuelve a correr "
                                   "el instalador del trabajador (install-worker) para "
                                   "poder grabar desde enlaces de plataformas.")
-        if _es_error_login(err) or (es_intento_cookies and _es_error_cookies(err)):
-            # Muro de login/bots (o el navegador no entregó sus
-            # cookies): se pasa al siguiente intento de la cadena.
+        if (_es_error_login(err) or _es_error_transitorio(err)
+                or (es_intento_cookies and _es_error_cookies(err))):
+            # Muro de login/bots, página incompleta transitoria (o el
+            # navegador no entregó sus cookies): se pasa al siguiente
+            # intento de la cadena.
             probados.append(descripcion)
             hubo_login = hubo_login or _es_error_login(err)
+            hubo_transitorio = hubo_transitorio or _es_error_transitorio(err)
             ultimo_error = _error_desde_stderr(err)
             continue
         # Error definitivo (privado, no disponible, formato, etc.):
@@ -254,6 +270,15 @@ def _resolver_con_cadena(url):
             "un HLS o RTMP de una emisión que controles, o importa un video propio. "
             f"Último motivo de la plataforma: {ultimo_error}")
         error.es_muro_login = True
+        raise error
+    if hubo_transitorio:
+        error = ErrorResolucion(
+            "La plataforma devolvió una página incompleta («needs to be "
+            "reloaded») en todas las vías intentadas: "
+            + ", ".join(probados) + ". Es un fallo pasajero de la "
+            "plataforma, no del enlace: espera unos segundos y vuelve a "
+            "darle a GRABAR.")
+        error.es_transitorio = True
         raise error
     raise ErrorResolucion(
         "No se pudo resolver la señal tras intentarlo por "
@@ -305,6 +330,12 @@ def resolver_fuente(url):
     try:
         return _resolver_con_cadena(url)
     except ErrorResolucion as e:
+        if getattr(e, "es_transitorio", False):
+            # Página incompleta en todas las vías (v1.3.19): es el
+            # clásico fallo que «recargar» cura. Se espera un respiro
+            # y se repite la cadena UNA sola vez antes de rendirse.
+            time.sleep(3)
+            return _resolver_con_cadena(url)
         if not getattr(e, "es_muro_login", False):
             raise
         reintentar, aviso = _intentar_refresco_sesion()

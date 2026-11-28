@@ -156,8 +156,8 @@ def test_sondeo_fallido_devuelve_none():
 
 
 def test_version_1_3_18_y_manifiesto():
-    assert worker_mod.VERSION == "1.3.18"
+    assert worker_mod.VERSION == "1.3.19"
     manifiesto = json.loads((ROOT / "worker-windows" / "manifest.json")
                             .read_text(encoding="utf-8"))
-    assert manifiesto["version"] == "1.3.18"
+    assert manifiesto["version"] == "1.3.19"
     assert "recorder.py" in manifiesto["files"]

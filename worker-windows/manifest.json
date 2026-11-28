@@ -18,7 +18,7 @@
     "radar.py": "181a24847394f894025be02ea3f822cea5b5c5693ceaf833fabb3372a4aca7c8",
     "recorder.py": "170d400832849d2d5508f6fa6840e9407b437fbfdf96790833c142b406a29273",
     "requirements.txt": "ac30d731b1cc532e45a2df0ba9c065375592e66de867fbc6ea6c0c67fefca940",
-    "resolver.py": "f6f9c951c6f2e0bffa1c0c23e5c20d2a447901a9f2a185e01726a4fc6772444a",
+    "resolver.py": "c82f43585cde09e075c758908a1fb0832b611ae13ae98ddd6a50cae50f3c1578",
     "sesion_youtube.py": "c5b91fa82ac0b960d23a28ca965a67e07578d73a73d51f03e30ad856f6d9bfab",
     "subtitulos.py": "00436c76593faeb99923c38c930a0255792fd8c707aaf6c6151bc1e92eb179eb",
     "sync.py": "bdb8c03c2563ba05ddb5723d0081b98350150b9195ecbe10c440bad95453a178",
@@ -26,7 +26,7 @@
     "transcribe.py": "f2f43819d34833ec1a4f538a02944f5735b03c6a00828ee2d6228216d73167d0",
     "viral.py": "934b4f4e8fd48109eda30cb49ea775d9236603bcdca87aa5fbe5a2ff27be1340",
     "vision.py": "8565812e246752d9feaf09a308fa4ffae96bf3d3750ca52a4ffd53e9121817e6",
-    "worker.py": "5286665d694b87456d8ba20050ed1a5810b293f0451f7cf68539b53ce72e7396"
+    "worker.py": "f841eb9360948ec9df2ef9281a55dfa54b1f8b991227054dddd18dff7a363aec"
   },
-  "version": "1.3.18"
+  "version": "1.3.19"
 }
