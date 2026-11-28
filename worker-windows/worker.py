@@ -5,7 +5,7 @@ Uso: python worker.py --config worker-config.json   (ver README.md)"""
 import argparse, json, os, subprocess, sys, threading, time
 from pathlib import Path
 
-VERSION = "1.3.20"
+VERSION = "1.3.21"
 sys.path.insert(0, str(Path(__file__).parent))
 from procesos import SIN_VENTANA
 import instancia
@@ -118,15 +118,32 @@ def procesar(job, cfg, api=None):
         # final revisa también el último segmento y reporta lo que
         # quedara abierto (aún necesita los segmentos en disco).
         radar = radares.pop(sid, None)
-        if radar: radar.detener()
         if en_vivo:
             bytes_final = rec.bytes_en_disco()
-            rec.descartar_segmentos()
+            # Cierre en SEGUNDO PLANO (v1.3.21): la pasada final del
+            # radar puede tardar minutos (espera a su hilo, puntúa los
+            # últimos segmentos y genera el último clip) y corría
+            # DENTRO de este comando: DETENER respondía tarde y el
+            # panel se quedaba congelado («todo pesado», Jose
+            # 2026-11-28). El comando responde en cuanto el Recorder
+            # para; el radar cierra y DESPUÉS se descartan los
+            # segmentos (su pasada final aún los necesita), en un hilo
+            # aparte que no bloquea al trabajador.
+            def _cierre_en_fondo():
+                try:
+                    if radar: radar.detener()
+                except Exception: pass
+                try: rec.descartar_segmentos()
+                except Exception: pass
+            threading.Thread(target=_cierre_en_fondo, daemon=True).start()
             return {"estado": "detenida", "grabacion_completa": None,
                     "nota": "Sesión en vivo detenida: solo se conservan los clips "
                             "generados (política de disco de Jose); no se guardó "
-                            "la película completa ni los segmentos de la grabación.",
+                            "la película completa ni los segmentos de la grabación. "
+                            "El cierre final del radar y la limpieza de segmentos "
+                            "siguen en segundo plano unos instantes.",
                     "bytes": bytes_final}
+        if radar: radar.detener()
         nota = ""
         if not completa:
             nota = getattr(rec, "error_union", "") or "La captura se detuvo, pero no quedó el archivo de la grabación completa."

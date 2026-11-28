@@ -91,8 +91,8 @@ def test_grabacion_real_corta_no_se_congela(tmp_path):
 
 
 def test_version_1_3_17_y_manifiesto():
-    assert worker_mod.VERSION == "1.3.20"
+    assert worker_mod.VERSION == "1.3.21"
     manifiesto = json.loads((ROOT / "worker-windows" / "manifest.json")
                             .read_text(encoding="utf-8"))
-    assert manifiesto["version"] == "1.3.20"
+    assert manifiesto["version"] == "1.3.21"
     assert "recorder.py" in manifiesto["files"]

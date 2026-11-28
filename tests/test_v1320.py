@@ -118,9 +118,9 @@ def test_exportar_sin_pico_es_la_clasica_de_siempre(tmp_path):
 
 
 def test_version_1_3_20_y_manifiesto():
-    assert worker_mod.VERSION == "1.3.20"
+    assert worker_mod.VERSION == "1.3.21"
     manifiesto = json.loads((ROOT / "worker-windows" / "manifest.json")
                             .read_text(encoding="utf-8"))
-    assert manifiesto["version"] == "1.3.20"
+    assert manifiesto["version"] == "1.3.21"
     for nombre in ("clipper.py", "vision.py", "radar.py", "analyzer.py"):
         assert nombre in manifiesto["files"]
